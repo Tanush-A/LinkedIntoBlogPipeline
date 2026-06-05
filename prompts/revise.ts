@@ -32,38 +32,53 @@ ${BRAND_BLOCK}
 2. QUICK-ANSWER BLOCK (40–80 words, no header, in the first ~200 words)
    A direct answer to the post's core question. Liftable by an AI answer engine.
  
-3. BODY (3–4 H2 sections)
-   Each H2 is a question a sales leader would actually ask.
+3. BODY (3–4 H2 sections — use "## " markdown prefix, no bold substitutes)
+   Each H2 is a question a sales leader would actually ask. Example: ## Why Do Most Closers Plateau?
    Each section answers its H2 directly in the first sentence.
    Each section has at least one specific claim (number, named behavior, concrete pattern).
- 
-4. FAQ (H2: "Frequently Asked Questions", exactly 3 Q&As)
-   Short, specific questions + 2–3 sentence direct answers.
+
+4. FAQ — use "## Frequently Asked Questions" (exact wording, "## " prefix)
+   Exactly 3 Q&As. Format each as:
+   **Q: question text?**
+   Answer in 2–3 direct sentences.
+   (blank line between Q&As)
  
 5. TARGET LENGTH: 800–950 words.
  
 6. Terret earns its mention as the earned resolution — once or twice in the body.
    Not in the opening. Not as a closing CTA.
  
-Return the revised blog post only. No preamble ("Here is the revised post:"), no commentary,
-no explanation of what you changed. Start with the first word of the post.`;
+Return your output in this exact format — nothing else:
+
+Line 1:    TITLE: <50–60 character blog post title. Informational, not clickbait. No quotes.>
+Line 2:    (blank line)
+Line 3+:   The revised post body, starting with the opening hook sentence.
+           No preamble. No "Here is the revised post:". No commentary. No explanation of changes.`;
  
-export function buildReviseMessages(rawDraft: string, critique: CritiqueOutput) {
+export function buildReviseMessages(
+  rawDraft: string,
+  critique: CritiqueOutput,
+  reviewerNote?: string,
+) {
   const critiqueBlock = JSON.stringify(critique, null, 2);
- 
+
+  const noteBlock = reviewerNote
+    ? `\n\n<reviewer_note>\nThis draft has already been seen by a human reviewer. They requested the following specific changes — apply them on top of the critique:\n${reviewerNote}\n</reviewer_note>`
+    : '';
+
   const user = `\
-Rewrite this blog post using the editorial critique below.
- 
+Rewrite this blog post using the editorial critique below.${noteBlock}
+
 <original_draft>
 ${rawDraft}
 </original_draft>
- 
+
 <editorial_critique>
 ${critiqueBlock}
 </editorial_critique>
- 
+
 Apply every note. Return the revised post only — no preamble or commentary.`;
- 
+
   return [
     { role: 'system' as const, content: SYSTEM },
     { role: 'user' as const, content: user },

@@ -7,6 +7,7 @@ import 'dotenv/config';
 import express from 'express';
 import { getDraft, updateDraft } from '../db';
 import { publish } from '../pipeline/publish';
+import { regenerate } from '../pipeline/regenerate';
 
 const app = express();
 // HTML forms POST as application/x-www-form-urlencoded — must parse that, not JSON
@@ -24,7 +25,17 @@ app.get('/review/:draftId', (req, res) => {
     return;
   }
 
-  const content = draft.revised_draft ?? draft.raw_draft ?? '[No content generated]';
+  const rawContent = draft.revised_draft ?? draft.raw_draft ?? '[No content generated]';
+  // Extract TITLE: line from the revise-pass output contract (Stage 4)
+  let proposedTitle: string | null = null;
+  let content = rawContent;
+  const firstLine = rawContent.split('\n')[0]?.trim() ?? '';
+  if (firstLine.startsWith('TITLE:')) {
+    proposedTitle = firstLine.replace(/^TITLE:\s*/, '').trim();
+    const rest = rawContent.split('\n').slice(1);
+    const bodyStart = rest.findIndex(l => l.trim() !== '');
+    content = rest.slice(bodyStart >= 0 ? bodyStart : 0).join('\n').trim();
+  }
 
   const statusColors: Record<string, { bg: string; fg: string }> = {
     pending:     { bg: '#fef3c7', fg: '#92400e' },
@@ -38,6 +49,8 @@ app.get('/review/:draftId', (req, res) => {
 
   // Statuses where action buttons are shown
   const canAct = ['pending', 'needs_edits', 'failed'].includes(draft.status);
+  const maxRevisions = parseInt(process.env.MAX_REVISIONS ?? '3', 10);
+  const atCap = draft.revision_count >= maxRevisions;
 
   const escapedContent = content
     .replace(/&/g, '&amp;')
@@ -103,6 +116,7 @@ app.get('/review/:draftId', (req, res) => {
   <span class="badge">${draft.status.toUpperCase()}</span>
 
   <p class="meta">Draft ID: <code>${id}</code></p>
+  ${proposedTitle ? `<p class="meta">Proposed title: <strong>${proposedTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</strong> <span style="color:#9ca3af;font-weight:400">(${proposedTitle.length} chars)</span></p>` : ''}
   <p class="meta">Revision: ${draft.revision_count}</p>
   <p class="meta">Created: ${draft.created_at}</p>
   <p class="meta">Updated: ${draft.updated_at}</p>
@@ -132,13 +146,18 @@ app.get('/review/:draftId', (req, res) => {
       </button>
     </form>
 
-    <form method="POST" action="/action/${id}">
-      <label for="note-${id}">Request edits</label>
-      <textarea id="note-${id}" name="note" rows="3" placeholder="Describe the changes needed…"></textarea>
-      <button type="submit" name="action" value="needs_edits" class="btn-edits">
-        Request Edits
-      </button>
-    </form>
+    ${atCap
+      ? `<p class="no-actions" style="color:#92400e;background:#fef3c7;padding:12px 16px;border-radius:6px;border:1px solid #fcd34d;">
+           Revision cap reached (${maxRevisions}/${maxRevisions}). Approve or Reject this draft — no more re-gens available.
+         </p>`
+      : `<form method="POST" action="/action/${id}">
+           <label for="note-${id}">Request edits <span style="font-weight:400;color:#6b7280">(revision ${draft.revision_count}/${maxRevisions})</span></label>
+           <textarea id="note-${id}" name="note" rows="3" placeholder="Describe the changes needed…" required></textarea>
+           <button type="submit" name="action" value="needs_edits" class="btn-edits">
+             Request Edits
+           </button>
+         </form>`
+    }
     ` : `<p class="no-actions">No actions available — status is <strong>${draft.status}</strong>.</p>`}
   </div>
 </body>
@@ -212,9 +231,48 @@ app.post('/action/:draftId', async (req, res) => {
     return;
   }
 
-  // --- REQUEST EDITS --- (Stage 3)
+  // --- REQUEST EDITS ---
   if (action === 'needs_edits') {
-    res.status(501).send('Request-edits flow is built in Stage 3 — not available yet.');
+    if (!['pending', 'needs_edits'].includes(draft.status)) {
+      res.status(400).send(
+        `Cannot request edits for draft with status: ${draft.status}. ` +
+          `Allowed from: 'pending' or 'needs_edits'.`,
+      );
+      return;
+    }
+
+    const MAX_REVISIONS = parseInt(process.env.MAX_REVISIONS ?? '3', 10);
+    if (draft.revision_count >= MAX_REVISIONS) {
+      res.status(400).send(
+        `Revision cap reached (${MAX_REVISIONS}). Approve or reject this draft — no more re-gens available.`,
+      );
+      return;
+    }
+
+    const noteText = (note ?? '').trim();
+    if (!noteText) {
+      res.status(400).send('A reviewer note is required when requesting edits.');
+      return;
+    }
+
+    // Store note and flip to needs_edits. revision_count increments on success only.
+    updateDraft(id, { status: 'needs_edits', reviewer_note: noteText });
+
+    // Fire re-gen in background — do NOT await; response goes out immediately
+    regenerate(id).catch((err: unknown) => {
+      console.error(
+        `[action] re-gen fire-and-forget error draft=${id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+
+    res.status(202).send(`<!DOCTYPE html>
+<html><body style="font-family:sans-serif;max-width:640px;margin:40px auto;padding:0 24px">
+  <h2>Edits Requested</h2>
+  <p>Re-generating in the background. The Slack notification will fire when the new draft is ready.</p>
+  <pre style="background:#fffbeb;border:1px solid #fcd34d;padding:14px;border-radius:6px;font-size:13px;white-space:pre-wrap">${noteText.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>
+  <p><a href="/review/${id}">Check draft status</a></p>
+</body></html>`);
     return;
   }
 

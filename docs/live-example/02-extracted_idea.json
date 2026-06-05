@@ -1,0 +1,15 @@
+{
+  "core_thesis": "AI can quickly identify revenue leaks by analyzing comprehensive data from call transcripts and emails.",
+  "supporting_points": [
+    "Traditional dashboards only provide outcomes without insights on causation.",
+    "AI can process vast amounts of data, revealing underlying issues that may not be apparent through surface metrics.",
+    "Understanding specific gaps, such as product knowledge, can prevent losses and misattributed causes like pricing."
+  ],
+  "target_audience": "CROs managing large sales teams with substantial budgets",
+  "angle": "Terret Nexus uncovered a $4M revenue gap within minutes by identifying that losses were due to a feature, not price — a crucial insight no traditional dashboard could reveal.",
+  "do_not_reuse": [
+    "The patient is dead",
+    "Terret Nexus",
+    "It wasn't the price. It was a specific missing feature"
+  ]
+}

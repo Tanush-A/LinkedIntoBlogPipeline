@@ -1,6 +1,14 @@
 // src/pipeline/publish.ts
 // Publishes an approved draft to dev.to via REST API.
 // Idempotency guard: returns early if status != 'approved' or cms_url already set.
+//
+// Stage 4 field mapping:
+//   title        — stripped from TITLE: first line of revised_draft (revise.ts contract)
+//   body_markdown — post body without TITLE: line; AEO structure baked in by revise prompt
+//   description  — first substantive paragraph, stripped of markdown, ≤155 chars (meta)
+//   tags         — comma-separated string per Forem API spec, max 4 plain lowercase strings
+//   canonical_url — two-step: POST to create → persist cms_url → PUT canonical_url best-effort
+//                   dev.to self-canonicalizes by default; the PUT makes it explicit.
 
 import type { Draft } from '../types';
 import { updateDraft } from '../db';
@@ -23,10 +31,10 @@ export async function publish(draft: Draft): Promise<void> {
   const apiKey = process.env.DEVTO_API_KEY;
   if (!apiKey) throw new Error('DEVTO_API_KEY not set');
 
-  const title = deriveTitle(draft);
-  const body_markdown = draft.revised_draft ?? '[No content generated]';
-  const description = deriveDescription(body_markdown, title);
+  const { title, body } = splitTitleAndBody(draft.revised_draft ?? '[No content generated]');
+  const description = deriveDescription(body);
 
+  // Step 1: Create the article (no canonical_url yet — we don't have the URL)
   const response = await fetch(DEVTO_API, {
     method: 'POST',
     headers: {
@@ -37,15 +45,13 @@ export async function publish(draft: Draft): Promise<void> {
     body: JSON.stringify({
       article: {
         title,
-        body_markdown,
-        // DEVTO_DRAFT_MODE=true → published:false (dev.to draft, not public) for test runs.
-        // Unset or any other value → published:true for real live publish.
+        body_markdown: body,
+        // DEVTO_DRAFT_MODE=true → published:false (dev.to draft) for test runs.
         published: process.env.DEVTO_DRAFT_MODE !== 'true',
-        // Tags: plain lowercase alphanumeric strings, MAX 4 — dev.to rejects/drops otherwise
-        tags: ['sales', 'revenue', 'ai', 'saas'],
+        // Tags: comma-separated string per Forem API spec (v1 schema type: string).
+        // Max 4, plain lowercase alphanumeric. Fifth is silently dropped.
+        tags: 'sales,revenue,ai,saas',
         description,
-        // canonical_url left null for Stage 1; full AEO field mapping is Stage 4
-        canonical_url: null,
       },
     }),
   });
@@ -58,29 +64,68 @@ export async function publish(draft: Draft): Promise<void> {
   }
 
   const postUrl = json.url;
+  const articleId = json.id;
   if (!postUrl) {
     throw new Error(`dev.to API returned no url field. Response: ${JSON.stringify(json)}`);
   }
 
+  // Step 2: Persist immediately — must happen before any further network calls.
+  // If the canonical PUT below throws, we've already secured the published state.
   updateDraft(draft.id, { status: 'published', cms_url: postUrl });
-}
 
-function deriveTitle(draft: Draft): string {
-  if (draft.revised_draft) {
-    const firstLine = draft.revised_draft
-      .split('\n')
-      .map((l) => l.replace(/^#+\s*/, '').trim())
-      .find((l) => l.length > 0);
-    if (firstLine) return firstLine.slice(0, 100);
+  // Step 3: Best-effort PUT to set canonical_url explicitly.
+  // dev.to defaults canonical to the article's own URL, so a PUT failure is cosmetic.
+  // We do not throw or revert status on failure — the post is already live and persisted.
+  if (articleId) {
+    try {
+      await fetch(`${DEVTO_API}/${articleId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'api-key': apiKey },
+        body: JSON.stringify({ article: { canonical_url: postUrl } }),
+      });
+      console.log(`[publish] canonical_url set to ${postUrl} for draft=${draft.id}`);
+    } catch (err) {
+      console.warn(`[publish] canonical_url PUT failed for draft=${draft.id}: ${String(err)}`);
+    }
   }
-  return `Draft ${draft.id.slice(0, 8)}`;
 }
 
-// Extract the first substantive paragraph for the meta description (≤155 chars).
-function deriveDescription(markdown: string, title: string): string {
-  const first = markdown
+/**
+ * The revise pass emits "TITLE: <title>\n\n<body>" as its output contract.
+ * Extract both; fall back to legacy first-line scan if TITLE: line is absent.
+ */
+function splitTitleAndBody(revised_draft: string): { title: string; body: string } {
+  const lines = revised_draft.split('\n');
+  const firstLine = lines[0]?.trim() ?? '';
+  if (firstLine.startsWith('TITLE:')) {
+    const title = firstLine.replace(/^TITLE:\s*/, '').trim().slice(0, 60);
+    // Skip the TITLE line and any immediately following blank lines
+    const rest = lines.slice(1);
+    const bodyStart = rest.findIndex(l => l.trim() !== '');
+    const body = rest.slice(bodyStart >= 0 ? bodyStart : 0).join('\n').trim();
+    return { title, body };
+  }
+  // Fallback for drafts written before Stage 4 revise contract
+  return { title: deriveTitle(revised_draft), body: revised_draft };
+}
+
+function deriveTitle(draft_text: string): string {
+  const firstLine = draft_text
     .split('\n')
-    .map((l) => l.trim())
-    .find((l) => l.length > 20 && !l.startsWith('#'));
-  return (first ?? title).slice(0, 155);
+    .map(l => l.replace(/^#+\s*/, '').trim())
+    .find(l => l.length > 0);
+  return (firstLine ?? `Draft`).slice(0, 60);
+}
+
+/**
+ * Extract first substantive paragraph from the post body as the meta description.
+ * The quick-answer block (40–80 words, first ~200 words) is the target — it's designed
+ * to be a direct extractable answer. Strip markdown formatting before truncating.
+ */
+function deriveDescription(body: string): string {
+  const candidate = body
+    .split(/\n{2,}/)
+    .map(p => p.replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '').trim())
+    .find(p => p.length >= 40 && !p.startsWith('#') && !p.startsWith('---'));
+  return (candidate ?? body).slice(0, 155);
 }

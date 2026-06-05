@@ -1,0 +1,36 @@
+{
+  "scores": {
+    "hook": 3,
+    "originality": 3,
+    "voice_fit": 2,
+    "value": 3,
+    "product_integration": 3,
+    "structure": 3,
+    "truth": 3,
+    "extractability": 3
+  },
+  "overall": 3,
+  "problems": [
+    "The hook lacks urgency and specificity. 'Your largest clients are churning faster than ever, and the board is asking for answers.' This is generic and doesn't directly engage the reader.",
+    "The originality is weak. The concepts of AI offering insights from data is not new or surprising.",
+    "Voice fit is poor. Sentences like 'AI offers a way out. By processing vast amounts of comprehensive data from call transcripts and emails, AI reveals underlying issues hidden beneath surface metrics.' are overly abstract and not specific or data-dense.",
+    "Value is average. Phrases like 'This granular insight allows for targeted interventions' don't provide a concrete framework or direct action.",
+    "Product integration feels a bit bolted on rather than seamlessly integrated. 'This is where Terret emerges as a crucial tool.' feels like a product ad.",
+    "Structure could be improved. Not all H2s directly answer their questions clearly in the first sentence.",
+    "Truth needs examination. Claim 'Terret analyzes comprehensive data instantly' may stretch the truth about the instant nature of analysis.",
+    "Extractability is average. The FAQ section is better but lacks concrete takeaway answers in the content body."
+  ],
+  "cut_list": [
+    "You poured over dashboards, but they only show what happened, without explaining why.",
+    "AI offers a way out.",
+    "This is where Terret emerges as a crucial tool."
+  ],
+  "strengthen": [
+    "Sharpen the hook with a specific scenario sales leaders can relate to, perhaps using a case or an implication of lost revenue.",
+    "Add statistics or specific examples to make the voice more aligned with Terret's data-dense style.",
+    "Incorporate more actionable steps or a framework that readers can implement right away.",
+    "Weave Terret into the narrative early on, illustrating its role naturally as you explain the shift from data to action.",
+    "Clarify structure. Ensure each H2 responds directly in its first sentence for better skimmability.",
+    "Ensure all claims regarding Terret (like instant analysis) are grounded in available information or verified proof points."
+  ]
+}

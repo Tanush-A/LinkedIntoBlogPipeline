@@ -369,10 +369,109 @@ Full ranked table goes in README §8.
 | Approval endpoint unauthenticated — anyone who can reach the URL can approve | Gate | Medium | High | Mapped — localhost is acceptable for the live example; for a public URL add a secret token in the path or basic auth; note in README |
 | Re-gen background task fails silently | Gate | Low | Medium | Yes — catch block reverts to `needs_edits`; logged with run_id |
  
-**Fix first:** prompt drift + an eval harness. A silent model version update breaks output
-quality with no alert. A rubric-scored regression test on a golden input set is the real
-answer; everything else is recoverable.
- 
+**Fix first (output quality):** prompt drift + an eval harness. A silent model version update
+breaks output quality with no alert. A rubric-scored regression test on a golden input set is
+the real answer; everything else is recoverable.
+
+**Fix first (security — beats all reliability items):** unauthenticated approval endpoint.
+Anyone who reaches `/review/:draftId` can publish content. Two-line fix: secret token in the
+URL path checked against an env var; return 401 if absent. Becomes load-bearing the moment
+ngrok is running.
+
+### Deferred hardening — Stage 5 (map-not-build)
+
+**What already exists:** run-ID stamped on every log line for correlation; `failed` status
+re-exposes the Approve button so any transient publish error has a manual retry path.
+
+| Item | What to add | Why deferred |
+|---|---|---|
+| Retries + backoff | `p-retry` wrapping all 5 API calls; max 3, 1 s → 2 s → 4 s | Manual `failed`→Approve covers demo; no burst traffic |
+| Observability / alerting | Structured log transport (Datadog/Loki); alert on `failed` rows older than N min | stdout is sufficient for a single observed demo run |
+| Auth-token refresh | Secrets manager (Doppler/AWS SM) with automatic reload on expiry | Env-var tokens don't expire during a demo timeline |
+| Rate-limit handling | Token bucket or queue with per-minute backpressure | No issue at one-post-at-a-time seed scale |
+| Scale / scheduling | Queue (BullMQ/SQS) + cron trigger (node-cron/GitHub Actions) | Manual trigger correct for demo; live ingestion is a stretch goal |
+| Unauthenticated endpoint | Secret token in URL path or HTTP Basic Auth; 401 if absent | Localhost is acceptable for submission; **priority-1 before any public tunnel** |
+
 ---
- 
+
+## 16. JSON-LD Schema Stack — Mapped, Not Built
+
+**Why not built:** dev.to / Forem owns the `<head>`. Custom `<script>` tags injected into
+`body_markdown` are stripped at render time. JSON-LD cannot persist on a hosted CMS page.
+
+**Production path:** Self-hosted front end (static site + Git pipeline, or Ghost self-hosted)
+where the template layer controls `<head>` and can inject per-post `<script type="application/ld+json">` blocks derived from the structured draft fields.
+
+**What we WOULD emit** (per post, generated from the live draft's title, description, H2 questions, and FAQ Q&As):
+
+### Article schema
+
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "<post title — 50–60 chars, from TITLE: revise output line>",
+  "description": "<meta description — ≤155 chars, first substantive paragraph of body>",
+  "author": {
+    "@type": "Organization",
+    "name": "Terret",
+    "url": "https://terret.ai"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Terret",
+    "logo": { "@type": "ImageObject", "url": "https://terret.ai/logo.png" }
+  },
+  "datePublished": "<ISO 8601 from dev.to publish response>",
+  "dateModified": "<ISO 8601, updated on re-gen cycles>",
+  "url": "<canonical dev.to URL, from cms_url>"
+}
+```
+
+### FAQPage schema
+
+Mirrors the question-shaped H2 body sections (3–4) **plus** the explicit FAQ section (3 Q&As).
+Each H2 heading becomes a `Question`; its answer is the first sentence of the section body.
+The three FAQ Q&As map directly.
+
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "<H2 text — question a sales leader would actually ask>",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "<first sentence of the section that directly answers the H2>"
+      }
+    },
+    "... one entry per body H2, then one per FAQ Q&A ..."
+  ]
+}
+```
+
+### Organization schema
+
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "Terret",
+  "url": "https://terret.ai",
+  "sameAs": [
+    "https://www.linkedin.com/company/terret",
+    "https://www.crunchbase.com/organization/terret"
+  ],
+  "description": "Terret Nexus is the answer-to-action engine for revenue teams — it finds the root cause of revenue problems and automatically deploys the fix across the entire sales team."
+}
+```
+
+**Generation note:** All three schemas are populated at publish time from structured fields
+already in the `Draft` row (`revised_draft` body for H2s/FAQ, `cms_url` for URL and dates,
+`extracted_idea.core_thesis` for description fallback). No additional API calls required.
+
+---
+
 *Implementation-ready. See CLAUDE.md for builder rules and build sequence.*

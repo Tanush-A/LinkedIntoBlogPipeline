@@ -4,6 +4,96 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+- [2026-06-05] Stage 6 — `DEVTO_DRAFT_MODE` env not picked up by running server. Chose: update article via dev.to PUT API (no pipeline re-run). Rejected: killing and re-running the pipeline (wasteful API spend, creates duplicate draft). Why: `dotenv/config` loads once at process start; a running server does not see `.env` changes. Fix: always restart approval server after `.env` edits, or set env vars in the shell before starting.
+
+- [2026-06-05] Stage 6 — `splitTitleAndBody` TITLE: check not matching in running server. Chose: fix title via PUT to dev.to API. Rejected: restarting server mid-demo (unnecessary friction for the live example). Why: the approval server (PID 7586) loaded an older version of `publish.ts` (the file has uncommitted changes — `M src/pipeline/publish.ts` in git status). The compiled-at-startup code lacked the TITLE: stripping. Fix: commit pending changes to publish.ts before starting the server.
+
+- [2026-06-04] Decision: post→blog mapping cardinality. Chose: 1:1 (one LinkedIn post → one blog).
+  Rejected: many:1 theme-synthesis (cluster related posts → one pillar post). Why: 1:1 gives a
+  clean, idempotent, demonstrable loop and was buildable in the time available. Synthesis is the
+  better product — a real marketing team writes pillar pieces from a theme, not a blog per post —
+  but needs a clustering step, a multi-post synthesis pass, and a 1:many Draft↔Post model.
+  Evidence it matters: 3 of 5 seed posts share the "unify your data" thesis, so 1:1 would publish
+  3 redundant blogs. Scoped as the #1 production upgrade.
+
+## [2026-06-04] Stage 5 — Deferred hardening (map-not-build)
+
+**Status:** Accepted
+
+**Context:**
+Stage 5 was scoped as "minimal hardening only" in CLAUDE.md. At demo scale — single pipeline
+run, single reviewer, localhost server — the cost of building these items exceeds the risk they
+mitigate. Each is documented below with what would be added in production and why it wasn't built
+now. What already exists: run-ID stamped on every log line; `failed` status re-exposes the
+Approve button so any transient publish error has a manual retry path without DB surgery.
+
+**Deferred items:**
+
+- **Automatic retries + backoff (`p-retry`):** wrap each of the five API calls (extract, draft,
+  critique, revise, dev.to publish) with p-retry (max 3 attempts, 1 s → 2 s → 4 s backoff);
+  transient network errors currently fail the draft permanently and require a human re-approve
+  click. Already mapped in SPEC §8. Manual retry via `failed`→Approve covers the demo case.
+
+- **Observability / alerting:** add a structured log transport (stdout lines exist; add Datadog/
+  Loki/CloudWatch sink) and alert on `status: failed` rows older than N minutes; currently a
+  failed draft is silent until a human checks the review page.
+
+- **Auth-token refresh:** rotate `OPENAI_API_KEY`, `SLACK_WEBHOOK_URL`, and `DEVTO_API_KEY` via
+  a secrets manager (AWS Secrets Manager, Doppler) with automatic reload on expiry; env-var
+  tokens are fine for a demo timeline but will expire silently in production.
+
+- **Rate-limit handling:** dev.to and OpenAI both rate-limit; a burst of posts in quick
+  succession (live ingestion mode) will hit 429s that p-retry alone won't absorb — add a token
+  bucket or queue with per-minute backpressure. No issue at seed/demo scale (one post at a time).
+
+- **Scale / scheduling:** fan-out to a queue (BullMQ, SQS) and a cron trigger (node-cron,
+  GitHub Actions) when live ingestion lands; current manual-trigger model is correct for demo
+  but doesn't scale past a handful of posts per day.
+
+- **Unauthenticated approval endpoint:** anyone who can reach `GET /review/:draftId` can approve
+  and publish; add a secret token in the URL path or HTTP Basic Auth before exposing via ngrok
+  or any public tunnel. Localhost is acceptable for the submission live example — production
+  deployment is not.
+
+**Fix first (single highest priority):**
+The unauthenticated approval endpoint. Every other item on this list is a reliability or
+operational concern — recoverable. An open approval URL lets anyone who discovers the link
+publish content under the brand without the reviewer's knowledge. The fix is two lines (compare
+a path token from env; return 401 if absent). It becomes load-bearing the moment ngrok is
+running.
+
+---
+
+## [2026-06-04] Stage 3 — Full Gate Decisions
+
+**Status:** Accepted
+
+**Context:**
+Building the request-edits gate: reviewer submits a note → background re-gen → re-notify → loop or cap → reject path.
+
+**Decisions:**
+
+- **Re-gen scope: revise-only (Pass 4).** Only the revise pass re-runs; extract/draft/critique passes are unchanged. Reviewer notes are editorial ("make section 2 shorter", "add a specific metric") — they target the output text, not the idea. Re-running extract+draft would re-spend 3 API calls to produce the same idea and risk drifting content the reviewer didn't ask to change. Rejected: full 4-pass re-gen (over-broad for a targeted editorial note; reserved for "wrong angle" cases which can be handled by rejecting and running the pipeline on a different post).
+
+- **Accumulate mode: re-gen works from previous `revised_draft`.** Each revision builds on the last. Rationale: iterative editing is natural — "round 2: make this shorter" shouldn't undo "round 1: sharpen the hook". Rejected: reset to `raw_draft` each round (loses round 1 edits; the reviewer would re-review a regressed draft).
+
+- **Increment revision_count on success only.** A failed re-gen doesn't burn a revision slot — the reviewer can retry immediately without consuming cap. Rejected: increment-on-click (punishes transient API errors with permanent cap consumption).
+
+- **`regenerate.ts` is self-contained; approval handler fire-and-forgets.** The HTTP response (202) returns before the OpenAI call. `regenerate()` catches its own errors internally and writes `status: needs_edits` + prefixed error note on failure — it never throws to the caller. The `.catch()` in the handler is a last-resort logger only.
+
+- **Failure reverts to `needs_edits`, not `failed`.** `needs_edits` means "re-gen triggered but not complete" — an error mid-re-gen leaves the draft in the same logical state: awaiting a successful revision. `failed` is reserved for publish errors (not generation errors) per the existing gate logic. The reviewer sees the error prefix in `reviewer_note` and can try again.
+
+- **Cap enforced server-side at POST handler time.** Client-side hiding of the Request Edits button is UI convenience only, not the guard. The 400 is the authoritative rejection.
+
+- **Reviewer note required (non-empty).** An empty note would inject a blank `<reviewer_note>` block into the revise pass — meaningless context. HTML `required` attribute enforces non-empty in the browser; server trims + checks for empty string for defense in depth.
+
+**Consequences:**
+- The gate loop: `needs_edits` → re-gen → `pending` → reviewer clicks approve/reject/request-edits again.
+- `revision_count` is a success counter, not an attempt counter. MAX_REVISIONS=3 means 3 successful re-gen cycles before the cap fires.
+- `reviewer_note` is overloaded: shows the latest editorial note OR a `[Re-gen failed]` prefix on error. UI renders it in both cases; the prefix makes failures distinguishable.
+
+---
+
 ## [2026-06-04] Generation prompts locked at Stage 2 baseline
 
 **Status:** Accepted
@@ -193,6 +283,62 @@ was not runnable.
 - JSON columns are not independently queryable — acceptable; no query touches their internals.
 - A caller could bypass the JSON boundary only by reaching the unexported handle (it cannot).
 - Native module (`better-sqlite3`) compiles/loads against Node 25 locally — verified working.
+
+---
+
+## [2026-06-04] Stage 4 — Structured publish on dev.to
+
+**Status:** Accepted
+
+**Context:**
+Mapping the `revised_draft` to all dev.to API fields with AEO structure. Four decisions
+required resolution.
+
+**Decisions:**
+
+- **Title source: revise pass emits `TITLE: <title>` as first output line.** `publish.ts`
+  splits it from the body and passes it as the separate `title` field to the API.
+  Rejected: derive from `extracted_idea.core_thesis` (truncation mid-phrase; title quality
+  not guaranteed); derive from first H2 (makes title identical to a body section heading).
+  This is the only approach that produces a purpose-built 50–60 char informational title
+  without an extra API call. Trade-off: touches the generation contract — `regenerate.ts`
+  also produces TITLE: lines, which the review UI now extracts and displays separately.
+
+- **`canonical_url` is a two-step: POST → persist `cms_url` → PUT best-effort.**
+  The POST creates the article; `status: published` and `cms_url` are persisted
+  immediately on success. Then a PUT sets `canonical_url = postUrl` explicitly.
+  If the PUT fails, the post is already live and persisted — the PUT failure is logged
+  but does not throw or revert status. dev.to self-canonicalizes to the article URL by
+  default, so a PUT failure is cosmetic. Rejected: PUT before persisting (if PUT throws,
+  status reverts to `failed`, reviewer retries, and a duplicate POST is made — idempotency
+  broken).
+
+- **`tags` sent as comma-separated string per Forem v1 API spec** (`"sales,revenue,ai,saas"`).
+  The Forem OpenAPI schema defines `tags` as `type: string` with the Forem editor guide
+  confirming "max of four tags, needs to be comma-separated." Stage 1 used a JSON array
+  (`["sales","revenue","ai","saas"]`); the server appears to coerce both formats, but the
+  official type is string. Changed to match spec to avoid silent coercion surprises.
+  Tags remain static for Stage 4; dynamic extraction from `extracted_idea` is post-core-loop.
+
+- **JSON-LD: documented in SPEC.md §16 as "map, not build."** dev.to owns `<head>` and
+  strips injected `<script>` tags from `body_markdown`. Injecting JSON-LD into the hosted
+  CMS page is not possible. The three schemas (Article + FAQPage + Organization) are fully
+  specified in SPEC.md §16 using fields already available at publish time. Production path:
+  self-hosted front end (static + Git or Ghost) where the template layer controls `<head>`.
+
+- **`## ` markdown syntax made explicit in the revise prompt.** Inspection of a Stage 2/3 draft
+  showed the model used `**bold text**` for H2 sections rather than `## heading` markdown.
+  dev.to renders `##` as real H2 elements for SEO/AEO; bold text does not produce heading
+  semantics. Fixed by adding explicit syntax requirement and a format example for body H2s and
+  the FAQ block ("## Frequently Asked Questions", "**Q: question?**" + answer).
+
+**Consequences:**
+- `prompts/revise.ts` now requires `TITLE: <title>\n\n<body>` format AND explicit `## ` heading
+  syntax. Existing `revised_draft` rows (pre-Stage 4) fall back to the legacy `deriveTitle()`
+  path in `publish.ts`.
+- Review UI (`approval.ts`) extracts and displays proposed title separately above content.
+- The AEO body structure (quick-answer block, question H2s, FAQ) is enforced by the revise
+  prompt — not validated at publish time. Verification is via inspection of a real published post.
 
 ---
 

@@ -6,6 +6,8 @@
 // Tracks the highest-scoring draft seen and returns that (best-of), not the last.
 // RESCORE_CAP is read from env per call so tests can override it per-scenario.
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import OpenAI from 'openai';
 import type { Post, ExtractedIdea, CritiqueOutput, VerificationResult } from '../types';
 import { buildExtractionMessages } from '../../prompts/extract';
@@ -100,6 +102,34 @@ export async function generate(post: Post): Promise<GenerateResult> {
       (isNewBest ? ' (new best)' : ''),
     );
 
+    // Persist this iteration's draft + critique for offline review.
+    // Gated on NODE_ENV !== 'test' so the test tree stays clean.
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const evalDir = resolve(__dirname, '../../docs/eval/rescore');
+        mkdirSync(evalDir, { recursive: true });
+        const scoreDetail = (Object.entries(rescoreObj.scores) as [string, number][])
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(', ');
+        const fileContent =
+          `# Rescore iter ${iter + 1} — post ${post.id}\n\n` +
+          `**Overall: ${rescoreObj.overall}/5** (${scoreDetail})\n\n` +
+          `## Problems\n\n` +
+          `${rescoreObj.problems.map((p) => `- ${p}`).join('\n') || '_none_'}\n\n` +
+          `## Strengthen\n\n` +
+          `${rescoreObj.strengthen.map((s) => `- ${s}`).join('\n') || '_none_'}\n\n` +
+          `## Draft\n\n` +
+          `${currentDraft}\n`;
+        writeFileSync(
+          resolve(evalDir, `${post.id}-iter-${iter + 1}.md`),
+          fileContent,
+          'utf-8',
+        );
+      } catch {
+        // Non-critical — file write failure must not fail generation
+      }
+    }
+
     if (isNewBest) {
       bestDraft = currentDraft;
       bestScore = rescoreObj.overall;
@@ -122,7 +152,8 @@ export async function generate(post: Post): Promise<GenerateResult> {
   }
 
   // ── Verify (deterministic — no LLM) ─────────────────────────────────────────
-  const verification = verifyDraft(bestDraft);
+  // Pass the source post text so figures the author cited are treated as grounded.
+  const verification = verifyDraft(bestDraft, [post.text]);
   console.log(
     `[generate] verify   post=${post.id}` +
     ` passed=${verification.passed}` +

@@ -128,6 +128,44 @@ describe('ungroundedNumbers', () => {
   });
 });
 
+// ─── source-post grounding ────────────────────────────────────────────────────
+
+describe('source-post grounding', () => {
+  it('figure from source post → grounded, does not flag', () => {
+    // "12%" is not in brand config or demo figures, but IS in the source post text
+    const r = verifyDraft(
+      'Win rates fell 12% over the quarter as enterprise deals stalled.',
+      ['Revenue teams saw a 12% decline in close rates over the past two quarters.'],
+    );
+    expect(r.ungroundedNumbers).not.toContain('12%');
+    expect(r.passed).toBe(true);
+  });
+
+  it('invented figure not in source post or brand → still flags', () => {
+    // "40%" is not in brand config, demo figures, or the source post
+    const r = verifyDraft(
+      'Win rates improved by 40% after the rollout.',
+      ['Revenue teams saw a 12% decline in close rates.'],
+    );
+    expect(r.ungroundedNumbers).toContain('40%');
+    expect(r.ungroundedNumbers).not.toContain('12%');
+  });
+
+  it('3.1x in source post → still flags (demo figure; source does not rescue it)', () => {
+    // The source post mentions 3.1x, but it's a demo figure — always flagged
+    const r = verifyDraft(
+      'ROI-first pitches close at 3.1x the rate of feature-led ones.',
+      ['Reps who quantified ROI closed at 3.1x the rate of those who led with features.'],
+    );
+    expect(r.ungroundedNumbers).toContain('3.1x');
+  });
+
+  it('no sourcePosts passed → default-deny unchanged (backward compat)', () => {
+    const r = verifyDraft('Win rates improved by 40%.');
+    expect(r.ungroundedNumbers).toContain('40%');
+  });
+});
+
 // ─── passed flag ─────────────────────────────────────────────────────────────
 
 describe('passed', () => {

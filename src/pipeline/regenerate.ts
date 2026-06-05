@@ -76,8 +76,8 @@ export async function regenerate(draftId: string): Promise<void> {
     if (!content) throw new Error('revise pass returned null content');
 
     // Re-verify: reviewer may have introduced or removed slop/ungrounded figures.
-    // Row always reflects the latest verification state.
-    const verification = verifyDraft(content);
+    // Pass source post so figures the original author cited remain grounded.
+    const verification = verifyDraft(content, [post.text]);
     console.log(
       `[regenerate] verify draft=${draftId}` +
       ` passed=${verification.passed}` +

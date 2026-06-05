@@ -4,6 +4,35 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+- [2026-06-05] Decision: source-post figures are grounded; demo figures are not, even in source.
+  Chose: `verifyDraft(draftText, sourcePosts: string[] = [])` — figures present in the source
+  post text(s) are added to the grounding corpus so the draft can cite a number the original
+  author stated without triggering a false-positive flag. Ordering: (1) demo-check first and
+  unconditional — 3.1x flags even if the source post cites it, because a source post citing a
+  Terret demo figure does not license repeating it as a proven stat; (2) brand config or source
+  corpus → grounded; (3) otherwise → default-deny.
+  `run.ts` confirmed as a non-call-site: it calls `generate(post)` which handles verification
+  internally. No run.ts change required.
+  Rejected: extending the source-post rescue to demo figures — the whole purpose of DEMO_FIGURES
+  is that those numbers must not appear as facts regardless of context.
+
+- [2026-06-05] Decision: product_context added to brand.ts; scoped to draft pass only.
+  Chose: a stat-free, analytically-written product_context field describing the problem
+  narrative, the three-stage mechanical loop, integrations, five named use cases, and target
+  persona — in neutral prose, not marketing copy. Exported as PRODUCT_CONTEXT_BLOCK and added
+  to prompts/draft.ts only (not BRAND_BLOCK, which would feed critique and revise prompts).
+  Source: terret.ai homepage (June 2026). /product and /solutions returned 404 — the site
+  appears to be single-page. No numeric stats added: every figure on the site appears inside
+  the interactive product demo ("what Nexus would surface for your data") — the same context as
+  the positive_examples figures already marked do-not-reproduce. Adding any site figure to
+  brand.ts would enter it into ALL_BRAND_STATS and silently disable the verify.ts guard for
+  that figure.
+  Added one exemplar paragraph to draft.ts anchoring the target analytical register (not
+  LinkedIn voice): dense, specific, no hype, no demo figures.
+  Rejected: adding product_context to BRAND_BLOCK — increases token cost for critique and
+  revise prompts with no corresponding benefit; those passes need brand voice rules, not
+  product substance.
+
 - [2026-06-05] Decision: re-score loop — quality as a convergent loop, best-of retained.
   Chose: after the initial revise pass, run critique→revise iterations until `overall ≥ 4`
   or `RESCORE_CAP` iterations (new env var, default 3). Track the highest-scoring draft and

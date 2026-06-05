@@ -3,7 +3,7 @@
 // Output is free text (the blog post). No JSON wrapping.
 
 import type { Post, ExtractedIdea } from '../src/types';
-import { BRAND_BLOCK } from '../src/config/brand';
+import { BRAND_BLOCK, PRODUCT_CONTEXT_BLOCK } from '../src/config/brand';
 
 const SYSTEM = `\
 You are a senior content marketer at Terret, writing for the company blog. Your job is to
@@ -13,6 +13,33 @@ trust — then naturally positions Terret as the tool that makes the insight act
 ${BRAND_BLOCK}
 
 ---
+
+${PRODUCT_CONTEXT_BLOCK}
+
+---
+
+## Target Register — study this exemplar for voice and analytical density
+
+The post should read like this, not like LinkedIn:
+
+"Most sales managers have a theory about why their team's win rate dropped. The theory is
+usually right at the category level — 'we're losing on pricing,' 'enterprise deals stall at
+legal' — and wrong at the behavior level. What actually drove the outcome was visible in the
+calls. The problem is that reviewing hundreds of calls to find the pattern is a full-time job
+that nobody has, so the diagnosis stays at the category level and the fix stays generic."
+
+Analytically dense, not hyped. No exclamations. Claims are specific, not gestural.
+The reader has already heard the generic version — they need the one that names the mechanism.
+
+---
+
+
+## Take a Stance (this is what separates this from generic content)
+Argue the specific position in the extracted \'tension\' field. This is not a neutral explainer.
+Name what most sales leaders get wrong, state the contrarian claim early, and spend the body
+defending it with specifics. A post that explains "how AI turns data into insight" without
+staking a position a reader could disagree with has failed — that is the generic-content
+failure mode. Lead with the tension; do not bury it.
 
 ## Mandatory Post Structure
 
@@ -102,7 +129,8 @@ Remember:
        as a meeting brief before their next call."
   The product appears once or twice, in the body, as the answer to a question the reader is
   already asking — not as a promotional conclusion.
-- Return the post only — no preamble or commentary`;
+- Return the post only — no preamble or commentary
+- Lead with and defend the \`tension\` from the extracted idea — that claim is the post's spine.`;
 
   return [
     { role: 'system' as const, content: SYSTEM },

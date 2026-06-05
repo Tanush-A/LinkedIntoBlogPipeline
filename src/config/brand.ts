@@ -6,7 +6,65 @@
 export const BRAND = {
   product_name: 'Terret Nexus',
   tagline: 'The Answer-to-Action Engine That Drives Revenue',
- 
+
+  /**
+   * Product context — neutral analytical prose for grounding draft writers.
+   * Sourced from terret.ai (homepage, June 2026; /product and /solutions returned 404).
+   *
+   * STRICT: no numeric stats here. Every figure on the site appears inside the
+   * interactive product demo — they are illustrative, not published customer results.
+   * Adding numbers to this block would silently enter them into ALL_BRAND_STATS in
+   * verify.ts and break the demo-figure guard. Describe mechanism and use cases only.
+   */
+  product_context: `
+THE CORE PROBLEM:
+Revenue orgs deploy AI tools and still can't get from diagnosis to a deployed fix. The signal
+that explains what's happening — which rep behaviors correlate with won vs. lost deals, which
+deals are genuinely at risk, which account expansion plays are ready now — is scattered across
+call transcripts, CRM records, emails, and deal notes. No individual or team can synthesize it
+fast enough to act at the speed the pipeline moves. Most "AI for sales" tools deliver analysis
+without action (you get a report, not a fix) or automation without insight (you get a workflow,
+not an explanation of why it works).
+
+HOW IT WORKS — THE THREE-STAGE LOOP:
+1. ASK: Terret's Revenue Graph unifies all revenue-facing signals into a single queryable model:
+   call transcripts, deal records, CRM updates, emails, and meeting notes — structured and
+   unstructured data together. Against that unified graph, Terret surfaces causal answers: not
+   just "win rates dropped" but the specific behaviors (ROI framing sequence, stakeholder
+   engagement timing, objection handling structure) that separate won deals from losses.
+
+2. OPERATIONALIZE: AI agents build executable playbooks — talk tracks, qualification gates,
+   objection responses, deal-stage criteria — derived from the actual behavior of the team's
+   own top performers, not generic sales methodology.
+
+3. ACTIVATE: The playbook deploys to every rep as a real-time call brief, updated 30 minutes
+   before each meeting and delivered via Slack. CRM records update automatically; deal risk
+   flags surface with specific recommended actions per deal.
+
+INTEGRATIONS: Salesforce (data source and write-back target), call recording platforms
+(transcript data), Slack (rep-facing brief delivery).
+
+USE CASES:
+- Closer playbook: identify what top reps do differently in early calls — specifically around
+  ROI quantification, pricing timing, and stakeholder sequencing — build a playbook from those
+  patterns, deploy it to the full team as meeting briefs
+- Win rate recovery: isolate the precise loss drivers across a deal set, build targeted coaching
+  around the gaps, deploy across all reps without manual manager intervention
+- Deal risk management: flag active deals based on objective signals (missing stakeholder
+  contacts, pricing timing relative to deal stage, deal age) and surface per-deal actions
+- Expansion acceleration: detect account signals (seat utilization trends, champion role
+  changes, upcoming QBRs) and surface specific plays per account
+- Roadmap prioritization: detect product gaps driving losses and surface them with attached
+  revenue impact
+
+WHO IT IS FOR:
+CROs and VP Sales at B2B companies with multi-rep field sales organizations — specifically,
+leaders responsible for turning a "I know we have this problem" diagnosis into a fix deployed
+across dozens or hundreds of reps. RevOps teams eliminating manual playbook-building from
+transcript review. Enterprise AEs managing multi-stakeholder deals who benefit from pre-meeting
+intelligence on what the account actually needs next.
+`.trim(),
+
   /**
    * One-sentence description for inline use.
    */
@@ -127,6 +185,17 @@ Second person ("you", "your team") where natural. No exclamation marks.
   },
 } as const;
  
+/**
+ * Product context block — used only by the draft pass (prompts/draft.ts).
+ * NOT added to BRAND_BLOCK intentionally: critique and revise prompts don't need
+ * product substance, and adding it there increases their token cost for no gain.
+ */
+export const PRODUCT_CONTEXT_BLOCK = `
+## Product Context (draw substance from this when integrating Terret)
+
+${BRAND.product_context}
+`.trim();
+
 /**
  * Formatted brand block for use in prompt system messages.
  * Import this string directly into prompt builders.

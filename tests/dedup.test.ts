@@ -10,7 +10,7 @@ import { insertDraft, _resetDbForTesting } from '../src/db';
 import { ingestPosts } from '../src/pipeline/ingest';
 import { makeDraft } from './helpers/fixtures';
 
-const TOTAL_SEED_POSTS = 5; // seed/posts.json has 5 posts
+const TOTAL_SEED_POSTS = 8; // seed/posts.json has 8 posts
 
 beforeEach(() => {
   _resetDbForTesting();

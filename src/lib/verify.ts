@@ -95,7 +95,17 @@ const SLOP_CHECKS: Array<{ term: string; re: RegExp }> = (BRAND.voice.slop_ban a
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export function verifyDraft(draftText: string): VerificationResult {
+/**
+ * Verify a draft for slop terms and ungrounded numbers.
+ *
+ * @param draftText   The full revised_draft string to check.
+ * @param sourcePosts Optional: the source post text(s) that originated this draft.
+ *   Figures present in the source posts are treated as grounded — they came from the
+ *   author's real claims, not from the LLM's imagination.
+ *   EXCEPTION: demo figures (DEMO_FIGURES) always flag even if present in source posts.
+ *   A source post that cites a 3.1x figure does not license the draft to repeat it as fact.
+ */
+export function verifyDraft(draftText: string, sourcePosts: string[] = []): VerificationResult {
   // ── bannedTerms ────────────────────────────────────────────────────────────
   const bannedTerms: string[] = [];
   for (const { term, re } of SLOP_CHECKS) {
@@ -103,16 +113,27 @@ export function verifyDraft(draftText: string): VerificationResult {
   }
 
   // ── ungroundedNumbers ─────────────────────────────────────────────────────
+  const SOURCE_STATS =
+    sourcePosts.length > 0 ? extractStats(sourcePosts.join(' ')) : new Set<string>();
+
   const ungroundedNumbers: string[] = [];
   const statsInDraft = [...draftText.matchAll(new RegExp(STAT_RE_SRC, 'g'))].map((m) => m[0]);
 
   for (const raw of statsInDraft) {
     const norm = raw.toLowerCase();
-    // Flag if it's a demo figure (in brand but not a verified stat)
-    // OR if it's not in the brand config at all (invented)
-    if (DEMO_FIGURES.has(norm) || !ALL_BRAND_STATS.has(norm)) {
+
+    // 1. Demo figures always flag — source posts do not rescue them.
+    //    A source post mentioning 3.1x does not license repeating it as a proven stat.
+    if (DEMO_FIGURES.has(norm)) {
       if (!ungroundedNumbers.includes(raw)) ungroundedNumbers.push(raw);
+      continue;
     }
+
+    // 2. Grounded: present in brand config OR traceable to the source post(s).
+    if (ALL_BRAND_STATS.has(norm) || SOURCE_STATS.has(norm)) continue;
+
+    // 3. Default-deny: invented figure not from any known corpus.
+    if (!ungroundedNumbers.includes(raw)) ungroundedNumbers.push(raw);
   }
 
   return {

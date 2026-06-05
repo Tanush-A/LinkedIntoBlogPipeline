@@ -283,8 +283,12 @@ app.post('/action/:draftId', async (req, res) => {
 // Start
 // ---------------------------------------------------------------------------
 
-const PORT = parseInt(process.env.PORT ?? '3000', 10);
-app.listen(PORT, () => {
-  console.log(`[server] Approval server running on http://localhost:${PORT}`);
-  console.log(`[server] Review a draft at http://localhost:${PORT}/review/<draftId>`);
-});
+export { app };
+
+if (process.env.NODE_ENV !== 'test') {
+  const PORT = parseInt(process.env.PORT ?? '3000', 10);
+  app.listen(PORT, () => {
+    console.log(`[server] Approval server running on http://localhost:${PORT}`);
+    console.log(`[server] Review a draft at http://localhost:${PORT}/review/<draftId>`);
+  });
+}

@@ -206,6 +206,11 @@ const UPDATABLE_COLUMNS: UpdatableColumn[] = [
   'eval_scores',
 ];
 
+/** Truncate all rows — test isolation only. Never call from production code. */
+export function _resetDbForTesting(): void {
+  db.exec('DELETE FROM drafts');
+}
+
 /**
  * Apply a partial update and return the FRESH row. Callers must use the return
  * value (or re-getDraft) — `updateDraft` does not mutate any object they hold.

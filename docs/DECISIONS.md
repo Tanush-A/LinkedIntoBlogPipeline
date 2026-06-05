@@ -4,6 +4,29 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+- [2026-06-05] Decision: re-score loop — quality as a convergent loop, best-of retained.
+  Chose: after the initial revise pass, run critique→revise iterations until `overall ≥ 4`
+  or `RESCORE_CAP` iterations (new env var, default 3). Track the highest-scoring draft and
+  return that — not the last — so a revision that makes things worse does not ship.
+  `critique` on the DB row is updated to reflect the best draft's critique, keeping it
+  coherent with `revised_draft` for future regeneration passes.
+  Rejected: (A) single extra critique pass with no loop — a draft can score 3 and improve
+  on a second pass; one-and-done would leave that iteration on the table; (B) reusing
+  `MAX_REVISIONS` for the rescore cap — `MAX_REVISIONS` is a human governance setting;
+  `RESCORE_CAP` is an automated quality gate; conflating them would let a reviewer run
+  out of edits because the pipeline used up the shared budget; (C) blocking on overall < 4
+  indefinitely — a hard block on quality score would stall the pipeline if the LLM
+  consistently grades below threshold; the cap is the escape valve.
+  Why: critique is probabilistic; a single pass can miss issues a second critique catches.
+  The loop closes the gap between first-try quality and iterated quality without human cost.
+  Judgment call (surfaced per CLAUDE.md): "Verify on one seed post: the log shows the score
+  improving across iterations." This requires a live OpenAI run. The mocked tests
+  ([3,3,4]→9 calls, final=v3; [4]→5 calls, no extra revise; [3,1]→7 calls, v1 retained
+  over worse v2) demonstrate the convergence logic deterministically. A live run is a
+  manual pre-demo step: set OPENAI_API_KEY and run `npm run pipeline` — the
+  `[generate] rescore  post=... iter=N/3 overall=M` log lines show convergence.
+  Not treating a live API run as a test-suite artifact.
+
 - [2026-06-05] Decision: verification layer design — deterministic guardrails, surfaced not hard-blocking.
   Chose: `verifyDraft(draftText: string)` runs after every revise pass (generate.ts and regenerate.ts),
   persists `VerificationResult` on the draft row, and renders the result on the review page.

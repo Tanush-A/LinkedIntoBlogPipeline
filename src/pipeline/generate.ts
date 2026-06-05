@@ -1,7 +1,10 @@
 // src/pipeline/generate.ts
-// Stage 2: real 4-pass GPT-4o chain.
-// extract → draft → critique → revise
-// Returns all four pass outputs so run.ts can persist them on the Draft row.
+// Generation chain: extract → draft → critique → revise → re-score loop → verify.
+//
+// Re-score loop: after the initial revise, critique the revised draft and
+// re-revise until overall ≥ 4 or RESCORE_CAP iterations (env var, default 3).
+// Tracks the highest-scoring draft seen and returns that (best-of), not the last.
+// RESCORE_CAP is read from env per call so tests can override it per-scenario.
 
 import OpenAI from 'openai';
 import type { Post, ExtractedIdea, CritiqueOutput, VerificationResult } from '../types';
@@ -14,7 +17,8 @@ import { verifyDraft } from '../lib/verify';
 export interface GenerateResult {
   extracted_idea: ExtractedIdea;
   raw_draft: string;
-  critique: string;          // JSON-stringified CritiqueOutput — ready for db (critique is verbatim)
+  /** JSON-stringified CritiqueOutput for the best draft — ready for db verbatim. */
+  critique: string;
   revised_draft: string;
   verification: VerificationResult;
 }
@@ -27,6 +31,8 @@ function requireContent(content: string | null, pass: string): string {
 export async function generate(post: Post): Promise<GenerateResult> {
   // Instantiate after dotenv has loaded (called from run.ts which imports dotenv/config).
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  // Read per call so tests can override via process.env.RESCORE_CAP.
+  const RESCORE_CAP = parseInt(process.env.RESCORE_CAP ?? '3', 10);
 
   // ── Pass 1: Extract ─────────────────────────────────────────────────────────
   console.log(`[generate] extract  post=${post.id}`);
@@ -47,28 +53,76 @@ export async function generate(post: Post): Promise<GenerateResult> {
   });
   const raw_draft = requireContent(draftResp.choices[0].message.content, 'draft');
 
-  // ── Pass 3: Critique ────────────────────────────────────────────────────────
+  // ── Pass 3: Critique (of raw_draft) ─────────────────────────────────────────
   console.log(`[generate] critique post=${post.id}`);
   const critiqueResp = await client.chat.completions.create({
     model: 'gpt-4o',
     response_format: { type: 'json_object' },
     messages: buildCritiqueMessages(raw_draft),
   });
-  const critiqueRaw = requireContent(critiqueResp.choices[0].message.content, 'critique');
-  // Parse to object for revise pass; re-stringify for db storage (critique column is verbatim).
-  const critiqueObj: CritiqueOutput = JSON.parse(critiqueRaw);
-  const critique = JSON.stringify(critiqueObj);
+  const initialCritiqueObj: CritiqueOutput = JSON.parse(
+    requireContent(critiqueResp.choices[0].message.content, 'critique'),
+  );
 
   // ── Pass 4: Revise ──────────────────────────────────────────────────────────
   console.log(`[generate] revise   post=${post.id}`);
   const reviseResp = await client.chat.completions.create({
     model: 'gpt-4o',
-    messages: buildReviseMessages(raw_draft, critiqueObj),
+    messages: buildReviseMessages(raw_draft, initialCritiqueObj),
   });
-  const revised_draft = requireContent(reviseResp.choices[0].message.content, 'revise');
+  const initialRevised = requireContent(reviseResp.choices[0].message.content, 'revise');
 
-  // ── Pass 5: Verify (deterministic — no LLM) ─────────────────────────────────
-  const verification = verifyDraft(revised_draft);
+  // ── Re-score loop: critique → revise until overall ≥ 4 or RESCORE_CAP ───────
+  // currentDraft: working copy each iteration.
+  // best*: highest-scoring version seen — returned on any exit reason.
+  // Strict > for the tie-break so the earliest draft at a given score is kept (deterministic).
+  // Fallback to initialCritiqueObj when RESCORE_CAP=0 (loop disabled).
+  let currentDraft = initialRevised;
+  let bestDraft = initialRevised;
+  let bestScore = 0;
+  let bestCritiqueObj: CritiqueOutput = initialCritiqueObj;
+
+  for (let iter = 0; iter < RESCORE_CAP; iter++) {
+    const rescoreResp = await client.chat.completions.create({
+      model: 'gpt-4o',
+      response_format: { type: 'json_object' },
+      messages: buildCritiqueMessages(currentDraft),
+    });
+    const rescoreObj: CritiqueOutput = JSON.parse(
+      requireContent(rescoreResp.choices[0].message.content, `rescore iter=${iter + 1}`),
+    );
+
+    const isNewBest = rescoreObj.overall > bestScore;
+    console.log(
+      `[generate] rescore  post=${post.id}` +
+      ` iter=${iter + 1}/${RESCORE_CAP}` +
+      ` overall=${rescoreObj.overall}` +
+      (isNewBest ? ' (new best)' : ''),
+    );
+
+    if (isNewBest) {
+      bestDraft = currentDraft;
+      bestScore = rescoreObj.overall;
+      bestCritiqueObj = rescoreObj;
+    }
+
+    if (rescoreObj.overall >= 4) break; // target reached — no further passes needed
+
+    if (iter + 1 >= RESCORE_CAP) break; // cap reached without hitting target
+
+    // Re-revise with this critique and loop again
+    const reReviseResp = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: buildReviseMessages(currentDraft, rescoreObj),
+    });
+    currentDraft = requireContent(
+      reReviseResp.choices[0].message.content,
+      `re-revise iter=${iter + 1}`,
+    );
+  }
+
+  // ── Verify (deterministic — no LLM) ─────────────────────────────────────────
+  const verification = verifyDraft(bestDraft);
   console.log(
     `[generate] verify   post=${post.id}` +
     ` passed=${verification.passed}` +
@@ -84,5 +138,11 @@ export async function generate(post: Post): Promise<GenerateResult> {
     }
   }
 
-  return { extracted_idea: extracted, raw_draft, critique, revised_draft, verification };
+  return {
+    extracted_idea: extracted,
+    raw_draft,
+    critique: JSON.stringify(bestCritiqueObj),
+    revised_draft: bestDraft,
+    verification,
+  };
 }

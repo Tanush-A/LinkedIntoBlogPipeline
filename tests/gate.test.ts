@@ -290,7 +290,5 @@ describe('verification layer', () => {
   });
 });
 
-describe('upcoming: re-score loop', () => {
-  it.todo('mocked scores [3,3,4] → loops until ≥4; retains best-of result');
-  it.todo('mocked scores [4] → single pass, no loop');
-});
+// Re-score loop tests live in tests/generation.test.ts (they test generate(), not the
+// HTTP surface). The stubs above are covered by the 're-score loop' describe block there.

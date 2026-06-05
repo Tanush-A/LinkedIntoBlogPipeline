@@ -29,6 +29,9 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+// Sets up the minimum mock sequence for generate():
+//   1 extract + 1 draft + 1 critique + 1 revise + 1 re-score critique (→ overall=4, loop exits).
+// With default RESCORE_CAP=3, the loop runs once and breaks on ≥4.
 function setupFourPassMocks(overrides: { revise?: string } = {}): void {
   mockCreate
     .mockResolvedValueOnce({
@@ -42,6 +45,10 @@ function setupFourPassMocks(overrides: { revise?: string } = {}): void {
     })
     .mockResolvedValueOnce({
       choices: [{ message: { content: overrides.revise ?? 'TITLE: Final\n\nFinal content.' } }],
+    })
+    // Re-score: MOCK_CRITIQUE.overall=4 → loop exits immediately, no re-revise.
+    .mockResolvedValueOnce({
+      choices: [{ message: { content: JSON.stringify(MOCK_CRITIQUE) } }],
     });
 }
 
@@ -59,10 +66,10 @@ describe('generation chain (LLM mocked)', () => {
     expect(result.revised_draft).toBe('TITLE: Final\n\nFinal content.');
   });
 
-  it('runs exactly four passes (extract, draft, critique, revise)', async () => {
+  it('runs five calls when re-critique scores ≥4 (extract, draft, critique, revise, re-critique)', async () => {
     setupFourPassMocks();
     await generate(MOCK_POST);
-    expect(mockCreate).toHaveBeenCalledTimes(4);
+    expect(mockCreate).toHaveBeenCalledTimes(5);
   });
 
   it('critique is stored as a JSON string, parseable as CritiqueOutput', async () => {
@@ -181,6 +188,75 @@ describe('verification DB round-trip', () => {
     const stored = getDraft(draftId)!;
     expect(stored.verification).toBeDefined();
     expect(stored.verification!.passed).toBe(true);
+  });
+});
+
+// ─── Re-score loop ────────────────────────────────────────────────────────────
+// These tests override process.env.RESCORE_CAP per-scenario and restore it
+// in afterEach. The outer afterEach (vi.resetAllMocks) runs after each test too.
+
+describe('re-score loop', () => {
+  afterEach(() => {
+    delete process.env.RESCORE_CAP;
+  });
+
+  it('scores ≥4 on first re-critique → loop exits, no extra revise (5 calls)', async () => {
+    // Default RESCORE_CAP=3; setupFourPassMocks already includes the re-critique → overall=4.
+    setupFourPassMocks();
+    await generate(MOCK_POST);
+    expect(mockCreate).toHaveBeenCalledTimes(5);
+  });
+
+  it('[3,3,4] → loops to ≥4; returns final draft, critique reflects best score', async () => {
+    // cap=3: iter0→score3+revise, iter1→score3+revise, iter2→score4+break = 4+3+2=9 calls
+    process.env.RESCORE_CAP = '3';
+    const c3 = { ...MOCK_CRITIQUE, overall: 3 as const };
+    const c4 = { ...MOCK_CRITIQUE, overall: 4 as const };
+    mockCreate
+      // initial 4 passes
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_EXTRACTED_IDEA) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: MOCK_RAW_DRAFT } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_CRITIQUE) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'TITLE: V1\n\nV1 content.' } }] })
+      // iter 0: re-critique(3) → re-revise → v2
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(c3) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'TITLE: V2\n\nV2 content.' } }] })
+      // iter 1: re-critique(3) → re-revise → v3
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(c3) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'TITLE: V3\n\nV3 content.' } }] })
+      // iter 2: re-critique(4) → break
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(c4) } }] });
+
+    const result = await generate(MOCK_POST);
+    expect(mockCreate).toHaveBeenCalledTimes(9);
+    // bestDraft = v3 (scored 4 in iter 2)
+    expect(result.revised_draft).toBe('TITLE: V3\n\nV3 content.');
+    expect(JSON.parse(result.critique).overall).toBe(4);
+  });
+
+  it('retains best-of: [3,1] at cap=2 → returns first-iteration draft, not the worse one', async () => {
+    // cap=2: iter0→score3+revise→v2, iter1→score1+cap break = 4+1+1+1=7 calls
+    // v1 scored 3, v2 scored 1 → best-of returns v1
+    process.env.RESCORE_CAP = '2';
+    const c3 = { ...MOCK_CRITIQUE, overall: 3 as const };
+    const c1 = { ...MOCK_CRITIQUE, overall: 1 as const };
+    mockCreate
+      // initial 4 passes → initialRevised = v1
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_EXTRACTED_IDEA) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: MOCK_RAW_DRAFT } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_CRITIQUE) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'TITLE: V1\n\nV1 content.' } }] })
+      // iter 0: re-critique(3) → update best(v1, 3), <4, iter+1=1<2 → re-revise → v2
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(c3) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'TITLE: V2\n\nV2 worse content.' } }] })
+      // iter 1: re-critique(1) → 1>3? NO. cap reached → break
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(c1) } }] });
+
+    const result = await generate(MOCK_POST);
+    expect(mockCreate).toHaveBeenCalledTimes(7);
+    // Best was v1 (score=3), not v2 (score=1)
+    expect(result.revised_draft).toBe('TITLE: V1\n\nV1 content.');
+    expect(JSON.parse(result.critique).overall).toBe(3);
   });
 });
 

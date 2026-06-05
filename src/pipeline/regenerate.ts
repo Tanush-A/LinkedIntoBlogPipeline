@@ -11,6 +11,7 @@ import type { Post, CritiqueOutput } from '../types';
 import { getDraft, updateDraft } from '../db';
 import { notify } from './notify';
 import { buildReviseMessages } from '../../prompts/revise';
+import { verifyDraft } from '../lib/verify';
 
 function loadPost(sourcePostId: string): Post {
   const seedPath = resolve(__dirname, '../../seed/posts.json');
@@ -74,11 +75,22 @@ export async function regenerate(draftId: string): Promise<void> {
     const content = reviseResp.choices[0].message.content;
     if (!content) throw new Error('revise pass returned null content');
 
+    // Re-verify: reviewer may have introduced or removed slop/ungrounded figures.
+    // Row always reflects the latest verification state.
+    const verification = verifyDraft(content);
+    console.log(
+      `[regenerate] verify draft=${draftId}` +
+      ` passed=${verification.passed}` +
+      ` banned=${verification.bannedTerms.length}` +
+      ` ungrounded=${verification.ungroundedNumbers.length}`,
+    );
+
     // Increment revision_count on success only (per decision: increment-on-success)
     const updated = updateDraft(draftId, {
       revised_draft: content,
       status: 'pending',
       revision_count: draft.revision_count + 1,
+      verification,
     });
 
     console.log(`[regenerate] done    draft=${draftId} revision=${updated.revision_count} status=pending`);

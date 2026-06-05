@@ -35,6 +35,7 @@ async function main(): Promise<void> {
       raw_draft: result.raw_draft,
       critique: result.critique,
       revised_draft: result.revised_draft,
+      verification: result.verification,
     });
 
     console.log(`[db] draft=${draftId} status=pending`);

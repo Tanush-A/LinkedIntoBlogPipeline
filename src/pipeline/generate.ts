@@ -4,17 +4,19 @@
 // Returns all four pass outputs so run.ts can persist them on the Draft row.
 
 import OpenAI from 'openai';
-import type { Post, ExtractedIdea, CritiqueOutput } from '../types';
+import type { Post, ExtractedIdea, CritiqueOutput, VerificationResult } from '../types';
 import { buildExtractionMessages } from '../../prompts/extract';
 import { buildDraftMessages } from '../../prompts/draft';
 import { buildCritiqueMessages } from '../../prompts/critique';
 import { buildReviseMessages } from '../../prompts/revise';
+import { verifyDraft } from '../lib/verify';
 
 export interface GenerateResult {
   extracted_idea: ExtractedIdea;
   raw_draft: string;
   critique: string;          // JSON-stringified CritiqueOutput — ready for db (critique is verbatim)
   revised_draft: string;
+  verification: VerificationResult;
 }
 
 function requireContent(content: string | null, pass: string): string {
@@ -65,5 +67,22 @@ export async function generate(post: Post): Promise<GenerateResult> {
   });
   const revised_draft = requireContent(reviseResp.choices[0].message.content, 'revise');
 
-  return { extracted_idea: extracted, raw_draft, critique, revised_draft };
+  // ── Pass 5: Verify (deterministic — no LLM) ─────────────────────────────────
+  const verification = verifyDraft(revised_draft);
+  console.log(
+    `[generate] verify   post=${post.id}` +
+    ` passed=${verification.passed}` +
+    ` banned=${verification.bannedTerms.length}` +
+    ` ungrounded=${verification.ungroundedNumbers.length}`,
+  );
+  if (!verification.passed) {
+    if (verification.bannedTerms.length > 0) {
+      console.warn(`[generate] banned_terms="${verification.bannedTerms.join(', ')}"`);
+    }
+    if (verification.ungroundedNumbers.length > 0) {
+      console.warn(`[generate] ungrounded_numbers="${verification.ungroundedNumbers.join(', ')}"`);
+    }
+  }
+
+  return { extracted_idea: extracted, raw_draft, critique, revised_draft, verification };
 }

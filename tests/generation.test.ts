@@ -2,7 +2,7 @@
 // Generation chain — LLM mocked to fixed fixtures; asserts orchestration and row shape.
 // Does NOT assert on prose quality (non-deterministic).
 
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
 const { mockCreate } = vi.hoisted(() => ({ mockCreate: vi.fn() }));
 vi.mock('openai', () => ({
@@ -11,13 +11,19 @@ vi.mock('openai', () => ({
   },
 }));
 
+import { randomUUID } from 'node:crypto';
 import { generate } from '../src/pipeline/generate';
+import { insertDraft, getDraft, _resetDbForTesting } from '../src/db';
 import {
   MOCK_POST,
   MOCK_EXTRACTED_IDEA,
   MOCK_CRITIQUE,
   MOCK_RAW_DRAFT,
 } from './helpers/fixtures';
+
+beforeEach(() => {
+  _resetDbForTesting();
+});
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -104,6 +110,77 @@ describe('generation chain (LLM mocked)', () => {
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_CRITIQUE) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: null } }] });
     await expect(generate(MOCK_POST)).rejects.toThrow('revise pass returned null content');
+  });
+});
+
+// ─── Verification integration (DB round-trip) ────────────────────────────────
+// This is the discriminating test: checks that verification is written to and
+// read from the DB correctly. Pure verify.test.ts unit tests won't catch a
+// broken JSON_COLUMNS entry or a missing rowToDraft parse.
+
+describe('verification DB round-trip', () => {
+  it('draft containing "delves" produces bannedTerms non-empty on the row', async () => {
+    setupFourPassMocks({
+      revise: 'TITLE: Revenue Clarity\n\nThis post delves into why forecasting fails.',
+    });
+    const result = await generate(MOCK_POST);
+
+    const draftId = randomUUID();
+    insertDraft({
+      id: draftId,
+      source_post_id: MOCK_POST.id,
+      status: 'pending',
+      revision_count: 0,
+      ...result,
+    });
+
+    const stored = getDraft(draftId)!;
+    expect(stored.verification).toBeDefined();
+    expect(stored.verification!.bannedTerms.some(t => t === 'delve')).toBe(true);
+    expect(stored.verification!.passed).toBe(false);
+  });
+
+  it('draft containing "3.1x" produces ungroundedNumbers non-empty on the row', async () => {
+    setupFourPassMocks({
+      revise: 'TITLE: ROI Selling\n\nROI-first pitches close at 3.1x the rate of feature-led ones.',
+    });
+    const result = await generate(MOCK_POST);
+
+    const draftId = randomUUID();
+    insertDraft({
+      id: draftId,
+      source_post_id: MOCK_POST.id,
+      status: 'pending',
+      revision_count: 0,
+      ...result,
+    });
+
+    const stored = getDraft(draftId)!;
+    expect(stored.verification).toBeDefined();
+    expect(stored.verification!.ungroundedNumbers).toContain('3.1x');
+    expect(stored.verification!.passed).toBe(false);
+  });
+
+  it('clean draft → verification.passed=true on the row', async () => {
+    setupFourPassMocks({
+      revise:
+        'TITLE: The Real Cost of Forecast Drift\n\n' +
+        'Forecasting is a management discipline, not a finance deliverable.',
+    });
+    const result = await generate(MOCK_POST);
+
+    const draftId = randomUUID();
+    insertDraft({
+      id: draftId,
+      source_post_id: MOCK_POST.id,
+      status: 'pending',
+      revision_count: 0,
+      ...result,
+    });
+
+    const stored = getDraft(draftId)!;
+    expect(stored.verification).toBeDefined();
+    expect(stored.verification!.passed).toBe(true);
   });
 });
 

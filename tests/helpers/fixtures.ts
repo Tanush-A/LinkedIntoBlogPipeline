@@ -26,6 +26,7 @@ export const MOCK_EXTRACTED_IDEA: ExtractedIdea = {
   target_audience: 'enterprise CROs managing 50+ reps',
   angle: 'Most forecasting tools optimize for reporting rather than decision-making',
   do_not_reuse: ['flying blind'],
+  tension: 'Teams have more data than ever but forecast accuracy has not improved',
 };
 
 export const MOCK_CRITIQUE: CritiqueOutput = {

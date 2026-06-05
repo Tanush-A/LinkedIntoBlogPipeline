@@ -262,12 +262,32 @@ describe('state machine', () => {
   });
 });
 
-// ─── todo stubs — upcoming extensions ────────────────────────────────────────
+// ─── Verification layer ───────────────────────────────────────────────────────
+// Pure verifyDraft unit checks (no DB needed). Comprehensive coverage lives in
+// tests/verify.test.ts; these stubs are the original gate checklist entries.
 
-describe('upcoming: verification layer', () => {
-  it.todo('"delves" → flagged by bannedTerms check');
-  it.todo('"3.1x" → flagged by ungroundedNumbers check');
-  it.todo('clean draft → verification passes');
+import { verifyDraft } from '../src/lib/verify';
+
+describe('verification layer', () => {
+  it('"delves" → bannedTerms non-empty', () => {
+    const r = verifyDraft('This post delves into revenue forecasting.');
+    expect(r.bannedTerms.some(t => t === 'delve')).toBe(true);
+    expect(r.passed).toBe(false);
+  });
+
+  it('"3.1x" → ungroundedNumbers non-empty (demo figure)', () => {
+    const r = verifyDraft('Closed at 3.1x the rate of feature-led pitches.');
+    expect(r.ungroundedNumbers).toContain('3.1x');
+    expect(r.passed).toBe(false);
+  });
+
+  it('clean draft → passed=true', () => {
+    const r = verifyDraft(
+      'TITLE: The Real Cost of Forecast Drift\n\n' +
+      'Forecasting is a management discipline, not a finance deliverable.',
+    );
+    expect(r.passed).toBe(true);
+  });
 });
 
 describe('upcoming: re-score loop', () => {

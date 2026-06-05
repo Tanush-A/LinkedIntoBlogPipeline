@@ -132,6 +132,24 @@ app.get('/review/:draftId', (req, res) => {
     ? `<div class="note-block"><strong>Reviewer note:</strong> ${draft.reviewer_note.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>`
     : ''}
 
+  <h2>Verification</h2>
+  ${draft.verification
+    ? draft.verification.passed
+      ? `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:6px;padding:12px 16px;font-size:13px;color:#065f46;">
+           <strong>Passed</strong> — no slop terms or ungrounded figures detected.
+         </div>`
+      : `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:12px 16px;font-size:13px;color:#9a3412;">
+           <strong>Issues found — review before approving.</strong>
+           ${draft.verification.bannedTerms.length > 0
+             ? `<p style="margin:8px 0 0"><strong>Banned terms:</strong> ${draft.verification.bannedTerms.map(t => `<code style="background:#fef3c7;padding:1px 5px;border-radius:3px">${t.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code>`).join(', ')}</p>`
+             : ''}
+           ${draft.verification.ungroundedNumbers.length > 0
+             ? `<p style="margin:8px 0 0"><strong>Ungrounded figures:</strong> ${draft.verification.ungroundedNumbers.map(n => `<code style="background:#fef3c7;padding:1px 5px;border-radius:3px">${n.replace(/&/g, '&amp;')}</code>`).join(', ')}</p>`
+             : ''}
+         </div>`
+    : `<p style="color:#9ca3af;font-size:13px">Not verified (draft predates the verification layer).</p>`
+  }
+
   <div class="actions">
     ${canAct ? `
     <form method="POST" action="/action/${id}">

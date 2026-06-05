@@ -60,6 +60,8 @@ export interface Draft {
   cms_url?: string;
   /** Optional manual rubric scores — for README before/after delta. Not a pipeline step. */
   eval_scores?: EvalScores;
+  /** Output of the deterministic verification pass. JSON-stored. */
+  verification?: VerificationResult;
   /** ISO 8601 */
   created_at: string;
   /** ISO 8601 */
@@ -85,6 +87,7 @@ export interface ExtractedIdea {
   angle: string;
   /** Phrases or framings too specific to the author's voice to reuse. */
   do_not_reuse: string[];
+  tension: string;
 }
 
 export interface CritiqueScores {
@@ -104,6 +107,22 @@ export interface CritiqueOutput {
   problems: string[];       // specific issues — quote the weak line, explain why it fails
   cut_list: string[];       // sentences or phrases to delete entirely
   strengthen: string[];     // specific things to add, sharpen, or restructure
+}
+
+// ---------------------------------------------------------------------------
+// Verification pass — deterministic post-generation guardrail
+// ---------------------------------------------------------------------------
+
+export interface VerificationResult {
+  /** Slop-ban terms found in the draft (case-insensitive, word-boundary matched). */
+  bannedTerms: string[];
+  /**
+   * Numeric/stat claims not grounded in brand.ts as verified facts.
+   * Includes demo figures explicitly marked "do NOT reproduce as proven stats."
+   */
+  ungroundedNumbers: string[];
+  /** true iff both lists are empty. */
+  passed: boolean;
 }
 
 // ---------------------------------------------------------------------------

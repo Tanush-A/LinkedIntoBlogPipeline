@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import type { Draft, DraftStatus, ExtractedIdea, EvalScores } from './types';
+import type { Draft, DraftStatus, ExtractedIdea, EvalScores, VerificationResult } from './types';
 
 const DB_PATH = process.env.DATABASE_URL ?? './db/pipeline.sqlite';
 
@@ -51,10 +51,21 @@ db.exec(`
     revised_draft   TEXT,
     cms_url         TEXT,   -- NULL is the publish() idempotency guard
     eval_scores     TEXT,   -- JSON(EvalScores)
+    verification    TEXT,   -- JSON(VerificationResult)
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
   );
 `);
+
+// Migration for existing db/pipeline.sqlite: CREATE TABLE IF NOT EXISTS is a no-op
+// on an existing table, so the verification column must be added separately.
+// SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS — swallow the
+// "duplicate column name" error that fires when the migration has already run.
+try {
+  db.exec(`ALTER TABLE drafts ADD COLUMN verification TEXT`);
+} catch {
+  // Column already exists — migration already applied.
+}
 
 // Ingest dedups by querying for an existing source_post_id — index that lookup.
 db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_source_post_id ON drafts (source_post_id);`);
@@ -76,6 +87,7 @@ interface DraftRow {
   revised_draft: string | null;
   cms_url: string | null;
   eval_scores: string | null;
+  verification: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -92,11 +104,12 @@ type WritableColumn =
   | 'revised_draft'
   | 'cms_url'
   | 'eval_scores'
+  | 'verification'
   | 'created_at'
   | 'updated_at';
 
 /** Object columns serialized to JSON on write and parsed on read. */
-const JSON_COLUMNS = new Set<WritableColumn>(['extracted_idea', 'eval_scores']);
+const JSON_COLUMNS = new Set<WritableColumn>(['extracted_idea', 'eval_scores', 'verification']);
 
 /** Coerce a Draft field to a value better-sqlite3 will accept (string | number | null). */
 function toBind(column: WritableColumn, value: unknown): string | number | null {
@@ -123,6 +136,9 @@ function rowToDraft(row: DraftRow): Draft {
     ...(row.eval_scores != null
       ? { eval_scores: JSON.parse(row.eval_scores) as EvalScores }
       : {}),
+    ...(row.verification != null
+      ? { verification: JSON.parse(row.verification) as VerificationResult }
+      : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -143,10 +159,12 @@ const insertStmt = db.prepare(`
   INSERT INTO drafts (
     id, source_post_id, status, revision_count, reviewer_note,
     extracted_idea, raw_draft, critique, revised_draft, cms_url, eval_scores,
+    verification,
     created_at, updated_at
   ) VALUES (
     @id, @source_post_id, @status, @revision_count, @reviewer_note,
     @extracted_idea, @raw_draft, @critique, @revised_draft, @cms_url, @eval_scores,
+    @verification,
     @created_at, @updated_at
   )
 `);
@@ -165,6 +183,7 @@ export function insertDraft(input: DraftInsert): Draft {
     revised_draft: toBind('revised_draft', input.revised_draft),
     cms_url: toBind('cms_url', input.cms_url),
     eval_scores: toBind('eval_scores', input.eval_scores),
+    verification: toBind('verification', input.verification),
     created_at: input.created_at ?? now,
     updated_at: input.updated_at ?? now,
   });
@@ -204,6 +223,7 @@ const UPDATABLE_COLUMNS: UpdatableColumn[] = [
   'revised_draft',
   'cms_url',
   'eval_scores',
+  'verification',
 ];
 
 /** Truncate all rows — test isolation only. Never call from production code. */

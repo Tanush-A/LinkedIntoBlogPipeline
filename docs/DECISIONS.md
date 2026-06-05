@@ -4,6 +4,23 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+- [2026-06-05] Decision: verification layer design — deterministic guardrails, surfaced not hard-blocking.
+  Chose: `verifyDraft(draftText: string)` runs after every revise pass (generate.ts and regenerate.ts),
+  persists `VerificationResult` on the draft row, and renders the result on the review page.
+  Rejected: (A) LLM-based re-scoring as the primary guardrail — probabilistic, adds latency and cost,
+  would undermine the principle that the gate is deterministic and auditable; (B) hard-blocking publish
+  when `passed: false` — removes the human from the loop; a reviewer may knowingly approve a draft that
+  uses a demo figure with proper editorial context. The gate non-negotiable ("nothing publishes without
+  approval") already guarantees a human sees every issue. (C) taking a `Draft` object rather than a
+  `draftText: string` — verification runs before the DB row exists (inside generate.ts), so the object
+  is not available at call time; a string input keeps the function pure and dependency-free.
+  Why: prompt instructions are probabilistic; any LLM may produce a slop term or cite a demo figure
+  despite explicit instructions. Deterministic checks at the output boundary catch these regardless
+  of model behavior. Surfacing to the human rather than auto-blocking keeps the reviewer in control
+  and avoids false-positive blocks on legitimate uses of flagged patterns.
+
+---
+
 - [2026-06-05] Stage 6 — `DEVTO_DRAFT_MODE` env not picked up by running server. Chose: update article via dev.to PUT API (no pipeline re-run). Rejected: killing and re-running the pipeline (wasteful API spend, creates duplicate draft). Why: `dotenv/config` loads once at process start; a running server does not see `.env` changes. Fix: always restart approval server after `.env` edits, or set env vars in the shell before starting.
 
 - [2026-06-05] Stage 6 — `splitTitleAndBody` TITLE: check not matching in running server. Chose: fix title via PUT to dev.to API. Rejected: restarting server mid-demo (unnecessary friction for the live example). Why: the approval server (PID 7586) loaded an older version of `publish.ts` (the file has uncommitted changes — `M src/pipeline/publish.ts` in git status). The compiled-at-startup code lacked the TITLE: stripping. Fix: commit pending changes to publish.ts before starting the server.

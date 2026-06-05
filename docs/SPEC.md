@@ -26,7 +26,7 @@ The loop closes with a real, publicly accessible Hashnode URL.
 | **2. Generate** | 3-pass chain: extract → draft → critique → revise | GPT-4o (`gpt-4o`) via `openai` npm |
 | **3. Notify** | Alert reviewer when draft is ready | Slack incoming webhook (HTTP POST) |
 | **4. Gate** | Human approves, rejects, or requests edits | Express endpoint (`/review/:draftId`) — Option C |
-| **5. Publish** | POST structured content to CMS | Hashnode GraphQL API → live public URL |
+| **5. Publish** | POST structured content to CMS | dev.to REST API → live public URL |
  
 **Cross-cutting — built:** idempotency (post_id dedup + publish cms_url guard), retries (p-retry,
 per API call), minimal observability (run ID + structured logs per step).
@@ -217,22 +217,25 @@ export async function publish(draft: Draft): Promise<void> {
  
 ## 7. AEO / GEO / SEO — Publish Requirements
  
-"Properly published" is a specific set of fields and structures. The Hashnode API call must
+"Properly published" is a specific set of fields and structures. The dev.to API call must
 set all of these — not just the body text.
  
-**Required CMS fields:**
+**Required CMS fields (dev.to REST API — `POST /api/articles`):**
  
 | Field | Notes |
 |---|---|
 | `title` | 50–60 chars; informational, not clickbait |
-| `slug` | readable-slug (auto-generated from title or explicit) |
-| `meta_description` | 150–160 chars; reads like a direct extractable answer |
-| `contentMarkdown` | Structured body (see in-body requirements below) |
-| `author` | Real name — Justin Shriber or Terret team member |
-| `tags` | Relevant to post topic + Terret's category |
-| `originalArticleURL` | Canonical URL (set to Hashnode URL itself for new posts) |
+| `body_markdown` | Structured body — headings, quick-answer block, FAQ all render from markdown |
+| `description` | 150–160 chars; reads like a direct extractable answer (maps to meta description) |
+| `tags` | Array of plain lowercase alphanumeric strings, MAX 4. e.g. `["sales","revenue","ai","saas"]` |
+| `canonical_url` | Canonical URL (set to the live dev.to URL after first publish for re-publishes) |
+| `published` | `true` to publish immediately |
  
-**JSON-LD schema — stack all three on the published page:**
+*Note: `slug` is derived from `title` automatically — do not set directly. No `publicationId` — posts go to the authenticated account.*
+ 
+**Auth: `api-key: <DEVTO_API_KEY>` header.** NOT `Authorization: Bearer`.
+ 
+**JSON-LD schema — stack all three in the body via HTML comment or front-matter (Stage 4):**
 - `Article` — headline, description, author, publisher, datePublished, dateModified
 - `FAQPage` — mirrors the question-shaped H2s; each section = one Q&A pair
 - `Organization` — Terret brand entity (name, url, sameAs: LinkedIn/Crunchbase)
@@ -245,7 +248,7 @@ set all of these — not just the body text.
  
 ## 8. Retries — Built, Minimal
  
-- Each of the 5 API calls (extract, draft, critique, revise, Hashnode publish) wrapped with
+- Each of the 5 API calls (extract, draft, critique, revise, dev.to publish) wrapped with
   `p-retry`.
 - Config: max 3 attempts, exponential backoff (1 s → 2 s → 4 s).
 - On final failure: log `{ run_id, step, error }`, set `draft.status = 'failed'`.

@@ -29,8 +29,22 @@ match this shape:
 Rules:
 - core_thesis must be your words, not a paraphrase of the post's opening line
 - supporting_points must be genuinely distinct, not three restatements of the thesis
-- angle must be specific — "it's counterintuitive" is not an angle
-- do_not_reuse should catch anything that would make the post recognizably derivative`;
+- angle MUST be concrete — a specific scenario, a surprising number, or a sharp claim
+  that would appear in the hook sentence of a blog post. It is NOT a meta-description of
+  why the idea is interesting. These fail:
+    ✗ "The counterintuitive gap between AI confidence and data quality"
+    ✗ "Sales leaders underestimate how hard data integration is"
+  These pass:
+    ✓ "A rep who mentions pricing on call one closes at 3x the rate of one who waits — the pattern is in every transcript, and no manager has read them"
+    ✓ "Your AI tool gave your CFO a $2.4M wrong number — confidently — because it couldn't see two of your five revenue systems"
+    ✓ "The reps carrying 80% of quota do three specific things before call two that bottom reps never do"
+  The angle should be liftable as-is into a hook sentence.
+- do_not_reuse captures the AUTHOR'S specific words, phrases, named examples, and framing.
+  It does NOT mean 'avoid their level of concreteness' — match it. If the post opens with a
+  vivid boardroom scene, the blog post needs an equally vivid opening (different scene, same
+  punch). If the post cites a specific behavior pattern, the blog post needs a specific
+  behavior pattern (a different one, or the same one attributed correctly). The failure mode
+  is abstracting away from specificity to avoid derivativeness — that is the wrong trade.`;
  
 export function buildExtractionMessages(post: Post) {
   const user = `\

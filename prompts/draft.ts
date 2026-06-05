@@ -19,8 +19,21 @@ ${BRAND_BLOCK}
 Your post must have exactly this structure, in this order:
 
 1. OPENING (no header)
-   Start directly on the idea. No throat-clearing. No title restatement.
-   The first sentence must make a specific sales leader want to keep reading.
+   The first sentence is a specific scene, number, or sharp claim — never a topic sentence.
+   Concrete AND on-voice: the hook must obey the voice rules even under pressure to be punchy.
+   Hype is not impact. A hook that grabs with inflated language will fail voice_fit.
+   These fail (generic topic):
+     ✗ "Revenue teams often grapple with the challenge of declining win rates."
+     ✗ "In today's data-driven environment, AI tools promise much."
+     ✗ "Sales leaders know that top reps outperform — but why?"
+   These fail (hype — concrete but off-voice):
+     ✗ "Your secret sauce for unlocking rep performance is hiding in your call transcripts."
+     ✗ "Game-changing insights are buried in your revenue data — ready to supercharge your team."
+   These pass (concrete AND on-voice):
+     ✓ "Your top five reps closed 80% of last quarter's revenue. You do not know what they did differently on calls one and two."
+     ✓ "The CRO asked why win rates dropped. RevOps spot-checked 40 calls. The actual answer was buried in 450,000 pages of transcripts no one had read."
+     ✓ "Most sales managers have diagnosed a pipeline problem using data that covered less than 15% of the actual revenue signal."
+   The opening does not introduce Terret. It earns the reader's attention with the problem.
 
 2. QUICK-ANSWER BLOCK (no header, 40–80 words)
    A direct answer to the post's core question, in the first ~200 words.
@@ -68,9 +81,27 @@ ${post.text}
 
 Remember:
 - Generate from the extracted idea, not from the post text
-- The promotion contract: Terret earns its mention as the earned resolution, not the subject
 - Start on the idea; no throat-clearing; first sentence earns the reader
 - Every section needs at least one specific claim
+- PRODUCT INTEGRATION — Terret must emerge from the argument, not be dropped in a fixed slot.
+  The pattern to follow:
+    1. Develop the reader's problem concretely across 2–3 sections
+    2. Reach the natural "how do you actually do this at scale across your whole team?" question
+    3. Answer THAT question with Terret as the specific mechanism — tied to this post's argument,
+       not a generic capability list
+  These fail:
+    ✗ "Terret Nexus can help sales leaders tackle these challenges."
+    ✗ "A platform like Terret Nexus provides the data integration your team needs."
+    ✗ A standalone "How Does Terret Solve This?" section that could be pasted into any post.
+  These pass:
+    ✓ "This is exactly the gap Terret Nexus closes: the Revenue Graph pulls every call transcript,
+       CRM update, and email thread into one model, so the analysis isn't based on what your reps
+       remembered to log — it's based on what actually happened."
+    ✓ "Terret Nexus does this automatically: it indexes your top reps' transcripts, extracts the
+       exact sequence that correlates with closed deals, and pushes that playbook to every rep
+       as a meeting brief before their next call."
+  The product appears once or twice, in the body, as the answer to a question the reader is
+  already asking — not as a promotional conclusion.
 - Return the post only — no preamble or commentary`;
 
   return [

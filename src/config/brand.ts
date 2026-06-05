@@ -117,6 +117,12 @@ Second person ("you", "your team") where natural. No exclamation marks.
       'is a powerful tool that',
       'Any opener that restates the title',
       'Throat-clearing intro paragraphs that say nothing',
+      'secret sauce',
+      'game-changer / game-changing',
+      'unlock (used metaphorically — "unlock potential", "unlock insights")',
+      'supercharge',
+      'level up',
+      'revolutionize',
     ],
   },
 } as const;

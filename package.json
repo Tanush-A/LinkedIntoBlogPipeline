@@ -5,13 +5,19 @@
   "description": "Agentic content pipeline: LinkedIn posts -> GPT-4o -> Slack approval -> Hashnode publish",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "scratch:db": "tsx scripts/scratch-db.ts"
+    "scratch:db": "tsx scripts/scratch-db.ts",
+    "pipeline": "tsx src/run.ts",
+    "server": "tsx src/server/approval.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^12.2.0"
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "openai": "^6.42.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
+    "@types/express": "^4.17.21",
     "@types/node": "^22.7.0",
     "tsx": "^4.19.1",
     "typescript": "^5.6.2"

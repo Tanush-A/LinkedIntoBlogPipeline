@@ -9,7 +9,7 @@ Do not improvise architecture.
 ## What This Project Does
  
 Justin Shriber's LinkedIn posts → 3-pass GPT-4o generation → Slack notification →
-human approval (Express UI) → structured Hashnode publish.
+human approval (Express UI) → structured dev.to publish.
  
 Full architecture and all ratified decisions: **SPEC.md**
 Micro-decisions made during the build: **docs/decision-log.md** (append as you go)
@@ -26,7 +26,7 @@ Micro-decisions made during the build: **docs/decision-log.md** (append as you g
 | Retries | `p-retry` (wraps every API call) |
 | Notify | Slack incoming webhook — HTTP POST |
 | Approval surface | Express — `GET /review/:draftId`, `POST /action/:draftId` |
-| Publish | Hashnode GraphQL API |
+| Publish | dev.to REST API (`POST /api/articles`) |
 | Local tunnel | ngrok (for public approval URL during demo) |
  
 ---
@@ -69,8 +69,7 @@ Micro-decisions made during the build: **docs/decision-log.md** (append as you g
 ```
 OPENAI_API_KEY=
 SLACK_WEBHOOK_URL=
-HASHNODE_TOKEN=
-HASHNODE_PUBLICATION_ID=
+DEVTO_API_KEY=             # dev.to personal API key (Settings → Account → DEV API Keys)
 BASE_URL=http://localhost:3000     # approval link base; update to ngrok URL for demo
 DATABASE_URL=./db/pipeline.sqlite
 MAX_REVISIONS=3
@@ -141,9 +140,11 @@ Inside `publish()`: guard on `status === 'approved' && cms_url == null`. These a
 **`draft.critique` is a JSON string — parse it before calling `buildReviseMessages`.**
 SQLite stores it as text. `buildReviseMessages` takes a `CritiqueOutput` object. In `generate.ts`, do `JSON.parse(draft.critique)` before passing. TypeScript will catch it if you forget — do not cast around the error.
  
-**Hashnode publish: field names are exact.**
-Canonical URL field: `originalArticleURL` (current Hashnode GraphQL API — do not change to `canonicalUrl`).
-Tags MUST be `{ name: string, slug: string }` objects — plain strings are silently dropped and the post publishes tagless. Verify all field names against live Hashnode GraphQL docs before writing the publish step.
+**dev.to publish: field names and tag rules are exact.**
+Auth header: `api-key: <DEVTO_API_KEY>` — NOT `Authorization: Bearer`. A missing or wrong header returns 401 with no body.
+Tags MUST be plain lowercase alphanumeric strings in an array, MAX 4 — `["sales", "revenue", "ai", "saas"]`. Dev.to silently drops a fifth tag and rejects non-alphanumeric characters. This is the OPPOSITE of Hashnode's `{ name, slug }` objects.
+Canonical URL field: `canonical_url` (not `originalArticleURL`). Dev.to derives the slug from the title — do not set `slug` directly.
+No `publicationId` needed — dev.to posts go to the authenticated user's account.
  
 ---
  
@@ -167,7 +168,7 @@ Do not improvise architecture.
 ## What This Project Does
  
 Justin Shriber's LinkedIn posts → 3-pass GPT-4o generation → Slack notification →
-human approval (Express UI) → structured Hashnode publish.
+human approval (Express UI) → structured dev.to publish.
  
 Full architecture and all ratified decisions: **SPEC.md**
 Micro-decisions made during the build: **docs/decision-log.md** (append as you go)
@@ -184,7 +185,7 @@ Micro-decisions made during the build: **docs/decision-log.md** (append as you g
 | Retries | `p-retry` (wraps every API call) |
 | Notify | Slack incoming webhook — HTTP POST |
 | Approval surface | Express — `GET /review/:draftId`, `POST /action/:draftId` |
-| Publish | Hashnode GraphQL API |
+| Publish | dev.to REST API (`POST /api/articles`) |
 | Local tunnel | ngrok (for public approval URL during demo) |
  
 ---
@@ -227,8 +228,7 @@ Micro-decisions made during the build: **docs/decision-log.md** (append as you g
 ```
 OPENAI_API_KEY=
 SLACK_WEBHOOK_URL=
-HASHNODE_TOKEN=
-HASHNODE_PUBLICATION_ID=
+DEVTO_API_KEY=             # dev.to personal API key (Settings → Account → DEV API Keys)
 BASE_URL=http://localhost:3000     # approval link base; update to ngrok URL for demo
 DATABASE_URL=./db/pipeline.sqlite
 MAX_REVISIONS=3
@@ -299,9 +299,11 @@ Inside `publish()`: guard on `status === 'approved' && cms_url == null`. These a
 **`draft.critique` is a JSON string — parse it before calling `buildReviseMessages`.**
 SQLite stores it as text. `buildReviseMessages` takes a `CritiqueOutput` object. In `generate.ts`, do `JSON.parse(draft.critique)` before passing. TypeScript will catch it if you forget — do not cast around the error.
  
-**Hashnode publish: field names are exact.**
-Canonical URL field: `originalArticleURL` (current Hashnode GraphQL API — do not change to `canonicalUrl`).
-Tags MUST be `{ name: string, slug: string }` objects — plain strings are silently dropped and the post publishes tagless. Verify all field names against live Hashnode GraphQL docs before writing the publish step.
+**dev.to publish: field names and tag rules are exact.**
+Auth header: `api-key: <DEVTO_API_KEY>` — NOT `Authorization: Bearer`. A missing or wrong header returns 401 with no body.
+Tags MUST be plain lowercase alphanumeric strings in an array, MAX 4 — `["sales", "revenue", "ai", "saas"]`. Dev.to silently drops a fifth tag and rejects non-alphanumeric characters. This is the OPPOSITE of Hashnode's `{ name, slug }` objects.
+Canonical URL field: `canonical_url` (not `originalArticleURL`). Dev.to derives the slug from the title — do not set `slug` directly.
+No `publicationId` needed — dev.to posts go to the authenticated user's account.
  
 ---
  

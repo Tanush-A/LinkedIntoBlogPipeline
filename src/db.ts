@@ -181,6 +181,15 @@ export function getDraft(id: string): Draft | undefined {
   return row ? rowToDraft(row) : undefined;
 }
 
+const getBySourcePostIdStmt = db.prepare(
+  `SELECT * FROM drafts WHERE source_post_id = ? ORDER BY created_at DESC LIMIT 1`,
+);
+
+export function getDraftBySourcePostId(sourcePostId: string): Draft | undefined {
+  const row = getBySourcePostIdStmt.get(sourcePostId) as DraftRow | undefined;
+  return row ? rowToDraft(row) : undefined;
+}
+
 /** Columns updateDraft accepts — every writable column except the auto-managed timestamps. */
 type UpdatableColumn = Exclude<WritableColumn, 'created_at' | 'updated_at'>;
 

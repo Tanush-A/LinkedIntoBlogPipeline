@@ -14,8 +14,8 @@ export interface Post {
   url: string;
   /** Full post body text */
   text: string;
-  /** ISO 8601 */
-  posted_at: string;
+  /** ISO 8601. Optional — seed posts have no reliable date and we do not invent one. */
+  posted_at?: string;
   media?: string[];
 }
 

@@ -86,7 +86,7 @@ describe('partitionPosts — deterministic validation', () => {
         { theme: 'Solo', post_ids: [X], confidence: 1 },
       ]),
     );
-    const parts = await partitionPosts([p(A), p(B), p(X)], []);
+    const { partitions: parts } = await partitionPosts([p(A), p(B), p(X)], []);
     expect(parts).toHaveLength(2);
     const group = parts.find((g) => g.post_ids.length === 2)!;
     expect(new Set(group.post_ids)).toEqual(new Set([A, B]));
@@ -97,7 +97,7 @@ describe('partitionPosts — deterministic validation', () => {
     mockCreate.mockResolvedValueOnce(
       judgeResponse([{ theme: 'Pair', post_ids: [A, B], confidence: 0.9 }]),
     );
-    const parts = await partitionPosts([p(A), p(B), p(X)], []);
+    const { partitions: parts } = await partitionPosts([p(A), p(B), p(X)], []);
     // X omitted by the judge → minted as a singleton.
     expect(parts.find((g) => g.post_ids.length === 1)!.post_ids).toEqual([X]);
     expect(parts.flatMap((g) => g.post_ids).sort()).toEqual([A, B, X].sort());
@@ -107,7 +107,7 @@ describe('partitionPosts — deterministic validation', () => {
     mockCreate.mockResolvedValueOnce(
       judgeResponse([{ theme: 'Bad', post_ids: [A, 'ghost-id'], confidence: 0.9 }]),
     );
-    const parts = await partitionPosts([p(A), p(B)], []);
+    const { partitions: parts } = await partitionPosts([p(A), p(B)], []);
     // Whole partition dropped → A and B each become singletons.
     expect(parts).toHaveLength(2);
     expect(parts.every((g) => g.post_ids.length === 1)).toBe(true);
@@ -121,7 +121,7 @@ describe('partitionPosts — deterministic validation', () => {
         { theme: 'Dup', post_ids: [B, X], confidence: 0.9 }, // B already claimed
       ]),
     );
-    const parts = await partitionPosts([p(A), p(B), p(X)], []);
+    const { partitions: parts } = await partitionPosts([p(A), p(B), p(X)], []);
     // [A,B] accepted; [B,X] dropped (B taken) → X re-covered as singleton.
     expect(parts.find((g) => g.post_ids.length === 2)!.post_ids.sort()).toEqual([A, B].sort());
     expect(parts.find((g) => g.post_ids.includes(X))!.post_ids).toEqual([X]);
@@ -132,7 +132,7 @@ describe('partitionPosts — deterministic validation', () => {
     mockCreate.mockResolvedValueOnce(
       judgeResponse([{ theme: 'Weak', post_ids: [A, B], confidence: 0.3 }]),
     );
-    const parts = await partitionPosts([p(A), p(B)], []);
+    const { partitions: parts } = await partitionPosts([p(A), p(B)], []);
     expect(parts).toHaveLength(2);
     expect(parts.every((g) => g.post_ids.length === 1)).toBe(true);
   });
@@ -145,7 +145,7 @@ describe('partitionPosts — deterministic validation', () => {
     mockCreate.mockResolvedValueOnce(
       judgeResponse([{ theme: 'Shaky roll-up', post_ids: [A, B, X], confidence: 0.2 }]),
     );
-    const parts = await partitionPosts([p(X)], existing);
+    const { partitions: parts } = await partitionPosts([p(X)], existing);
     // Below floor → dropped → only the NEW id X is re-covered as a singleton.
     // A and B (existing members) must NOT become drafts.
     expect(parts).toHaveLength(1);
@@ -164,14 +164,14 @@ describe('partitionPosts — deterministic validation', () => {
         { theme: 'New', post_ids: [X], confidence: 1 },
       ]),
     );
-    const parts = await partitionPosts([p(X)], existing);
+    const { partitions: parts } = await partitionPosts([p(X)], existing);
     expect(parts).toHaveLength(1);
     expect(parts[0].post_ids).toEqual([X]);
   });
 
   it('judge throw → fail-open to one singleton per new post', async () => {
     mockCreate.mockRejectedValueOnce(new Error('judge API down'));
-    const parts = await partitionPosts([p(A), p(B), p(X)], []);
+    const { partitions: parts } = await partitionPosts([p(A), p(B), p(X)], []);
     expect(parts).toHaveLength(3);
     expect(parts.every((g) => g.post_ids.length === 1 && g.confidence === 1)).toBe(true);
   });
@@ -184,7 +184,7 @@ describe('ingestPartitions — grouping + fingerprint dedup', () => {
     mockCreate.mockResolvedValueOnce(
       judgeResponse([{ theme: 'Unify your revenue data', post_ids: [A, B], confidence: 0.9 }]),
     );
-    const parts = await ingestPartitions();
+    const { partitions: parts } = await ingestPartitions();
     // 8 seed posts: A+B grouped → 1 pillar + 6 singletons = 7 partitions.
     expect(parts).toHaveLength(7);
     const pillar = parts.find((pt) => pt.posts.length === 2)!;
@@ -200,7 +200,7 @@ describe('ingestPartitions — grouping + fingerprint dedup', () => {
     mockCreate.mockResolvedValueOnce(
       judgeResponse([{ theme: 'Unify', post_ids: [A, B], confidence: 0.9 }]),
     );
-    const first = await ingestPartitions();
+    const { partitions: first } = await ingestPartitions();
     for (const part of first) {
       insertDraft(
         makeDraft({
@@ -211,7 +211,7 @@ describe('ingestPartitions — grouping + fingerprint dedup', () => {
       );
     }
     // All 8 posts are now known → ingest short-circuits before the judge runs.
-    const second = await ingestPartitions();
+    const { partitions: second } = await ingestPartitions();
     expect(second).toHaveLength(0);
   });
 
@@ -228,7 +228,7 @@ describe('ingestPartitions — grouping + fingerprint dedup', () => {
     mockCreate.mockResolvedValueOnce(
       judgeResponse([{ theme: 'Unify your revenue data (expanded)', post_ids: [A, B, X], confidence: 0.9 }]),
     );
-    const parts = await ingestPartitions();
+    const { partitions: parts } = await ingestPartitions();
 
     const rollup = parts.find((pt) => pt.posts.length === 3)!;
     expect(rollup).toBeDefined();

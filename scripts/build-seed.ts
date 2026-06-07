@@ -11,18 +11,12 @@
 // posted_at is intentionally omitted — the real publish dates are unknown and we
 // do not invent them (Post.posted_at is optional).
 
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Post } from '../src/types';
+import { postIdFromUrl } from '../src/lib/postId';
 
 const AUTHOR = 'Justin Shriber';
-
-/** Stable dedup id: SHA-256 of the normalized url, first 12 hex chars. */
-function postIdFromUrl(url: string): string {
-  const normalized = url.trim().split('?')[0].replace(/\/+$/, '');
-  return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 12);
-}
 
 const RAW: { url: string; text: string }[] = [
   {

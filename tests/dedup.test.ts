@@ -21,7 +21,7 @@ beforeEach(() => {
 
 describe('ingest dedup (partitions)', () => {
   it('empty DB → ingestPartitions returns one singleton partition per seed post', async () => {
-    const partitions = await ingestPartitions();
+    const { partitions } = await ingestPartitions();
     expect(partitions).toHaveLength(TOTAL_SEED_POSTS);
     for (const part of partitions) {
       // Judge failed open → every partition is n=1 (the 1:1 case).
@@ -34,7 +34,7 @@ describe('ingest dedup (partitions)', () => {
   });
 
   it('processing a partition (its fingerprint gets a draft) excludes it on the next run', async () => {
-    const first = await ingestPartitions();
+    const { partitions: first } = await ingestPartitions();
     const firstPart = first[0]!;
 
     // Simulate the pipeline having generated + persisted a draft for this partition.
@@ -45,13 +45,13 @@ describe('ingest dedup (partitions)', () => {
       }),
     );
 
-    const second = await ingestPartitions();
+    const { partitions: second } = await ingestPartitions();
     expect(second).toHaveLength(first.length - 1);
     expect(second.find((p) => p.fingerprint === firstPart.fingerprint)).toBeUndefined();
   });
 
   it('all partitions processed → ingestPartitions returns empty array', async () => {
-    const partitions = await ingestPartitions();
+    const { partitions } = await ingestPartitions();
     for (const part of partitions) {
       insertDraft(
         makeDraft({
@@ -60,11 +60,11 @@ describe('ingest dedup (partitions)', () => {
         }),
       );
     }
-    expect(await ingestPartitions()).toHaveLength(0);
+    expect((await ingestPartitions()).partitions).toHaveLength(0);
   });
 
   it('a singleton partition carries exactly one full Post object (1:1 unchanged)', async () => {
-    const partitions = await ingestPartitions();
+    const { partitions } = await ingestPartitions();
     const part = partitions[0]!;
     expect(part.posts).toHaveLength(1);
     expect(typeof part.posts[0].id).toBe('string');
@@ -74,7 +74,7 @@ describe('ingest dedup (partitions)', () => {
   });
 
   it('draft created for a partition starts pending with its source ids + fingerprint', async () => {
-    const partitions = await ingestPartitions();
+    const { partitions } = await ingestPartitions();
     const part = partitions[0]!;
     const draft = insertDraft(
       makeDraft({

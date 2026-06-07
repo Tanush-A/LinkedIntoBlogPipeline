@@ -45,3 +45,32 @@ export async function notify(draft: Draft, posts: Post[]): Promise<void> {
     throw new Error(`Slack webhook failed: ${response.status} ${response.statusText}`);
   }
 }
+
+/**
+ * One best-effort Slack line summarizing posts triaged out this cycle, e.g.
+ * "Ingestion triage: 3 posts skipped (2 reshare, 1 too-short)". Never throws.
+ */
+export async function notifySkipped(skipped: { post_id: string; reason: string }[]): Promise<void> {
+  if (skipped.length === 0) return;
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) return;
+
+  const PREFILTER = new Set(['reshare', 'media-only', 'too-short']);
+  const counts = new Map<string, number>();
+  for (const s of skipped) {
+    const bucket = PREFILTER.has(s.reason) ? s.reason : 'low-value';
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  const detail = [...counts.entries()].map(([r, c]) => `${c} ${r}`).join(', ');
+  const text = `*Ingestion triage:* ${skipped.length} post${skipped.length > 1 ? 's' : ''} skipped (${detail})`;
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+  } catch (err) {
+    console.warn(`[notify] skip summary failed: ${err instanceof Error ? err.message : err}`);
+  }
+}

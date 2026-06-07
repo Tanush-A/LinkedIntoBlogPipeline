@@ -71,16 +71,30 @@ db.exec(`
 `);
 
 // posts table — the canonical post store. ingest upserts every post it sees
-// (seed file feeds it now; live ingestion lands here next). loadPosts and the
-// judge's existing-group member summaries read from this table, NOT the seed file.
+// (seed file or live LinkdAPI). loadPosts and the judge's existing-group member
+// summaries read from this table, NOT the seed file.
+//   status='active'    → in the candidate pool for grouping/generation
+//   status='discarded' → triaged out (prefilter or judge skip); kept so it is never
+//                        re-judged, and still resolvable for roll-ups. discard_reason logs why.
 db.exec(`
   CREATE TABLE IF NOT EXISTS posts (
-    id          TEXT PRIMARY KEY,
-    url         TEXT NOT NULL,
-    author      TEXT NOT NULL,
-    text        TEXT NOT NULL,
-    posted_at   TEXT,
-    ingested_at TEXT NOT NULL
+    id             TEXT PRIMARY KEY,
+    url            TEXT NOT NULL,
+    author         TEXT NOT NULL,
+    text           TEXT NOT NULL,
+    posted_at      TEXT,
+    status         TEXT NOT NULL DEFAULT 'active',
+    discard_reason TEXT,
+    ingested_at    TEXT NOT NULL
+  );
+`);
+
+// meta — tiny key/value store. Used so the always-on server (Run B) can read the
+// watcher's (separate process) last-poll status for GET /status.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
   );
 `);
 
@@ -93,6 +107,8 @@ for (const ddl of [
   `ALTER TABLE drafts ADD COLUMN source_post_ids TEXT`,
   `ALTER TABLE drafts ADD COLUMN group_fingerprint TEXT`,
   `ALTER TABLE drafts ADD COLUMN theme TEXT`,
+  `ALTER TABLE posts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+  `ALTER TABLE posts ADD COLUMN discard_reason TEXT`,
 ]) {
   try {
     db.exec(ddl);
@@ -358,23 +374,37 @@ function rowToPost(row: PostRow): Post {
 }
 
 const upsertPostStmt = db.prepare(`
-  INSERT INTO posts (id, url, author, text, posted_at, ingested_at)
-  VALUES (@id, @url, @author, @text, @posted_at, @ingested_at)
+  INSERT INTO posts (id, url, author, text, posted_at, status, discard_reason, ingested_at)
+  VALUES (@id, @url, @author, @text, @posted_at, @status, @discard_reason, @ingested_at)
   ON CONFLICT(id) DO UPDATE SET
     url = excluded.url, author = excluded.author, text = excluded.text,
-    posted_at = excluded.posted_at
+    posted_at = excluded.posted_at, status = excluded.status,
+    discard_reason = excluded.discard_reason
 `);
 
-/** Insert or update a post. ingested_at is set once (preserved on conflict). */
-export function upsertPost(post: Post): void {
+/**
+ * Insert or update a post. ingested_at is set once (preserved on conflict).
+ * Defaults to status='active'; pass { status, discardReason } to triage a post out.
+ */
+export function upsertPost(
+  post: Post,
+  opts: { status?: 'active' | 'discarded'; discardReason?: string } = {},
+): void {
   upsertPostStmt.run({
     id: post.id,
     url: post.url,
     author: post.author,
     text: post.text,
     posted_at: post.posted_at ?? null,
+    status: opts.status ?? 'active',
+    discard_reason: opts.discardReason ?? null,
     ingested_at: new Date().toISOString(),
   });
+}
+
+/** Triage a post out of the candidate pool (prefilter or judge skip). */
+export function discardPost(post: Post, reason: string): void {
+  upsertPost(post, { status: 'discarded', discardReason: reason });
 }
 
 const getPostByIdStmt = db.prepare(`SELECT id, url, author, text, posted_at FROM posts WHERE id = ?`);
@@ -387,6 +417,35 @@ export function getPostById(id: string): Post | undefined {
 export function getAllPosts(): Post[] {
   const rows = db.prepare(`SELECT id, url, author, text, posted_at FROM posts`).all() as PostRow[];
   return rows.map(rowToPost);
+}
+
+/** Posts in the candidate pool (status='active') — the input to grouping/generation. */
+export function getActivePosts(): Post[] {
+  const rows = db
+    .prepare(`SELECT id, url, author, text, posted_at FROM posts WHERE status = 'active'`)
+    .all() as PostRow[];
+  return rows.map(rowToPost);
+}
+
+/** Ids of triaged-out posts — folded into the dedup set so they are never re-judged. */
+export function getDiscardedPostIds(): Set<string> {
+  const rows = db.prepare(`SELECT id FROM posts WHERE status = 'discarded'`).all() as { id: string }[];
+  return new Set(rows.map((r) => r.id));
+}
+
+// ── meta key/value (cross-process status) ──────────────────────────────────────
+
+const setMetaStmt = db.prepare(
+  `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+);
+
+export function setMeta(key: string, value: string): void {
+  setMetaStmt.run(key, value);
+}
+
+export function getMeta(key: string): string | undefined {
+  const row = db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as { value: string } | undefined;
+  return row?.value;
 }
 
 /** Resolve post ids to full Post objects from the DB. Throws if any id is missing. */
@@ -420,9 +479,16 @@ const UPDATABLE_COLUMNS: UpdatableColumn[] = [
   'verification',
 ];
 
-/** Truncate all DRAFT rows — test isolation only. Posts persist (seed-synced once). */
+/** Truncate DRAFT rows + meta — test isolation only. Posts persist (seed-synced once). */
 export function _resetDbForTesting(): void {
   db.exec('DELETE FROM drafts');
+  db.exec('DELETE FROM meta');
+}
+
+/** Truncate posts + meta — for live-ingestion tests that drive the posts table directly. */
+export function _resetPostsForTesting(): void {
+  db.exec('DELETE FROM posts');
+  db.exec('DELETE FROM meta');
 }
 
 /**

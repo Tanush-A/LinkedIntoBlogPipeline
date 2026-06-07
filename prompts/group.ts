@@ -28,6 +28,12 @@ to an existing theme, output a partition containing the existing members' ids PL
 new post's id — this triggers an intentional roll-up piece. Only do this when the new
 post genuinely extends the theme; do not force attachment.
 
+You ALSO triage. Some posts cannot inspire an original blog post: pure announcements,
+engagement bait, hiring/event promos, a bare link or quote, or anything with no
+extractable argument or insight. Put each such post in "skipped" with a short reason
+instead of forcing it into a partition. Be conservative — when a post has a real idea,
+group or singleton it; only skip posts that genuinely have nothing to build on.
+
 Return JSON only, exactly this shape:
 {
   "partitions": [
@@ -36,14 +42,19 @@ Return JSON only, exactly this shape:
       "post_ids": ["id1", "id2"],
       "confidence": 0.85
     }
+  ],
+  "skipped": [
+    { "post_id": "id3", "reason": "event announcement, no argument" }
   ]
 }
 
 Rules:
-- EVERY new post id appears in EXACTLY ONE partition. No omissions, no duplicates.
+- EVERY new post id appears in EXACTLY ONE partition OR in "skipped". No omissions, no duplicates.
 - Singletons are partitions with one post_id. Give them a theme too.
 - confidence is your belief (0–1) that the group is editorially coherent. Singletons: 1.0.
-- Existing-member ids may ONLY appear in a partition that also contains at least one new id.`;
+- Existing-member ids may ONLY appear in a partition that also contains at least one new id;
+  never put an existing-member id in "skipped".
+- "skipped" may be an empty array. When unsure, prefer a singleton partition over skipping.`;
 
 export function buildGroupingMessages(
   newPosts: Post[],

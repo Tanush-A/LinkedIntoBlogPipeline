@@ -7,6 +7,8 @@
     "typecheck": "tsc --noEmit",
     "scratch:db": "tsx scripts/scratch-db.ts",
     "pipeline": "tsx src/run.ts",
+    "poll": "tsx src/ingest/watch.ts --once",
+    "watch": "tsx src/ingest/watch.ts",
     "server": "tsx src/server/approval.ts",
     "test": "vitest run",
     "test:watch": "vitest",

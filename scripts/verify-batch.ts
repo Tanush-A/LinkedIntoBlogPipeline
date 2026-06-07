@@ -41,7 +41,7 @@ async function main() {
   console.log(`\n[verify] judge source: ${haveKey ? 'LIVE OpenAI judge' : 'groups.json override + fail-open singletons (no API key)'}`);
 
   // ── Run 1 ──────────────────────────────────────────────────────────────────
-  const partitions = await ingestPartitions();
+  const { partitions } = await ingestPartitions();
   console.log(`\n[verify] run 1 → ${partitions.length} partition(s):`);
   for (const part of partitions) {
     const tag = part.posts.length > 1 ? `PILLAR n=${part.posts.length}` : '1:1';
@@ -88,8 +88,8 @@ async function main() {
 
   // ── Run 2 (same batch) → idempotency ────────────────────────────────────────
   const rerun = await ingestPartitions();
-  console.log(`\n[verify] run 2 (same batch) → ${rerun.length} partition(s)`);
-  assert(rerun.length === 0, 're-run of the same batch yields 0 partitions (fingerprint dedup)');
+  console.log(`\n[verify] run 2 (same batch) → ${rerun.partitions.length} partition(s)`);
+  assert(rerun.partitions.length === 0, 're-run of the same batch yields 0 partitions (fingerprint dedup)');
 
   console.log(`\n[verify] ${process.exitCode ? 'FAILED' : 'PASSED'}\n`);
 }

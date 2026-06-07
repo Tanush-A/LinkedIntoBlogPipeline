@@ -27,6 +27,7 @@ All tests run against the **real code paths** — `db.ts`, the approval handlers
 | `gate.test.ts` | HTTP handler state machine: approve, reject, request-edits, failure, retry, edge cases |
 | `dedup.test.ts` | `ingestPartitions()` dedup by `group_fingerprint` (judge fails open → 1:1) |
 | `synthesis.test.ts` | Batch many:1: grouping judge (mocked) validation, fingerprint dedup/roll-up, N-post extract, verify corpus, posts table |
+| `live-ingest.test.ts` | LinkdAPI live mode (HTTP mocked): mapping, prefilter, judge skip persist+dedup, groups.json force-include, text backfill, failure→skip cycle |
 | `generation.test.ts` | 4-pass GPT chain with mocked LLM — orchestration and row shape |
 | `notify.test.ts` | Slack webhook — message shape and review URL construction |
 | `publish.test.ts` | dev.to field mapping, auth header, idempotency guard, DEVTO_DRAFT_MODE |

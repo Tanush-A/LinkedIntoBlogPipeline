@@ -15,7 +15,7 @@ vi.mock('openai', () => ({
 }));
 
 import { app } from '../src/server/approval';
-import { insertDraft, getDraft, getPostById, _resetDbForTesting } from '../src/db';
+import { insertDraft, getDraft, getPostById, setMeta, _resetDbForTesting } from '../src/db';
 import { groupFingerprint } from '../src/lib/fingerprint';
 import {
   makeDraft,
@@ -267,6 +267,20 @@ describe('state machine', () => {
   it('GET /review/:draftId for missing draft returns 404', async () => {
     const res = await request(app).get(`/review/${randomUUID()}`);
     expect(res.status).toBe(404);
+  });
+
+  it('GET /status returns the last poll record (and a null when none has run)', async () => {
+    const none = await request(app).get('/status');
+    expect(none.status).toBe(200);
+    expect((none.body as { lastPoll: unknown }).lastPoll).toBeNull();
+
+    setMeta('last_poll', JSON.stringify({ at: '2026-06-07T00:00:00.000Z', found: 6, newCount: 6, partitions: 3, generated: 1, skipped: 1, error: null }));
+    const res = await request(app).get('/status');
+    expect(res.status).toBe(200);
+    const body = res.body as { lastPoll: { found: number; generated: number; error: string | null } };
+    expect(body.lastPoll.found).toBe(6);
+    expect(body.lastPoll.generated).toBe(1);
+    expect(body.lastPoll.error).toBeNull();
   });
 
   it('GET /review for a pillar draft lists ALL source posts and the theme', async () => {

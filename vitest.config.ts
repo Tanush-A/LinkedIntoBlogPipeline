@@ -21,6 +21,7 @@ export default defineConfig({
       OPENAI_API_KEY: 'test-key',
       SLACK_WEBHOOK_URL: 'https://hooks.slack.com/test',
       DEVTO_API_KEY: 'test-devto-key',
+      LINKDAPI_KEY: 'test-linkdapi-key',
       BASE_URL: 'http://localhost:3000',
       MAX_REVISIONS: '3',
       PORT: '3001',

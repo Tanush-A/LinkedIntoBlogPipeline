@@ -6,9 +6,10 @@
 import 'dotenv/config';
 import express from 'express';
 import type { Post } from '../types';
-import { getDraft, updateDraft, getPostById } from '../db';
+import { getDraft, updateDraft, getPostById, getMeta } from '../db';
 import { publish } from '../pipeline/publish';
 import { regenerate } from '../pipeline/regenerate';
+import { LAST_POLL_KEY } from '../pipeline/cycle';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -16,6 +17,19 @@ const app = express();
 // HTML forms POST as application/x-www-form-urlencoded — must parse that, not JSON
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+// ---------------------------------------------------------------------------
+// GET /status — last live-ingestion poll result (written by the watcher process)
+// ---------------------------------------------------------------------------
+
+app.get('/status', (_req, res) => {
+  const raw = getMeta(LAST_POLL_KEY);
+  if (!raw) {
+    res.json({ lastPoll: null, message: 'no poll has run yet' });
+    return;
+  }
+  res.json({ lastPoll: JSON.parse(raw) as unknown });
+});
 
 // ---------------------------------------------------------------------------
 // GET /review/:draftId

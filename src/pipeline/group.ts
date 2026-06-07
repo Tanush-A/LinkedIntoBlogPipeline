@@ -10,18 +10,34 @@ import { firstLine } from '../lib/text';
 
 export type { ExistingGroupSummary };
 
+/** A post the judge triaged out as having no extractable argument. */
+export interface SkippedPost {
+  post_id: string;
+  reason: string;
+}
+
+export interface PartitionResult {
+  partitions: GroupPartition[];
+  /** Posts the judge deemed too thin/promotional to inspire a blog post. */
+  skipped: SkippedPost[];
+}
+
 interface JudgePartition {
   theme?: unknown;
   post_ids?: unknown;
   confidence?: unknown;
 }
 
-/** Partition a batch of new posts into theme groups + singletons. Fail-open to singletons. */
+/**
+ * Partition a batch of new posts into theme groups + singletons, plus a judge skip list.
+ * Every NEW post id ends up in exactly one partition OR the skip list. Fail-open: any judge
+ * failure returns all-singletons and an EMPTY skip list (discards nothing).
+ */
 export async function partitionPosts(
   newPosts: Post[],
   existingGroups: ExistingGroupSummary[],
-): Promise<GroupPartition[]> {
-  if (newPosts.length === 0) return [];
+): Promise<PartitionResult> {
+  if (newPosts.length === 0) return { partitions: [], skipped: [] };
 
   const MODEL = process.env.OPENAI_MODEL ?? 'gpt-5.5';
   const FLOOR = parseFloat(process.env.GROUP_CONFIDENCE_MIN ?? '0.6');
@@ -39,6 +55,7 @@ export async function partitionPosts(
   });
 
   let parsed: JudgePartition[];
+  let parsedSkips: { post_id?: unknown; reason?: unknown }[];
   try {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const resp = await client.chat.completions.create({
@@ -48,14 +65,30 @@ export async function partitionPosts(
     });
     const content = resp.choices[0].message.content;
     if (!content) throw new Error('judge returned null content');
-    const obj = JSON.parse(content) as { partitions?: unknown };
+    const obj = JSON.parse(content) as { partitions?: unknown; skipped?: unknown };
     if (!Array.isArray(obj.partitions)) throw new Error('judge JSON missing partitions array');
     parsed = obj.partitions as JudgePartition[];
+    parsedSkips = Array.isArray(obj.skipped)
+      ? (obj.skipped as { post_id?: unknown; reason?: unknown }[])
+      : [];
   } catch (err) {
     console.warn(
       `[group] judge failed — falling back to singletons: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return newPosts.map((p) => singleton(p.id));
+    // Fail-open: discard nothing.
+    return { partitions: newPosts.map((p) => singleton(p.id)), skipped: [] };
+  }
+
+  // Validate the skip list FIRST: a skip only claims a NEW id (never an existing member or
+  // unknown). A partition wins over a skip on contradiction (handled below — partitions run
+  // after and only the still-uncovered new ids fall through to the singleton sweep).
+  const skipped: SkippedPost[] = [];
+  const skippedIds = new Set<string>();
+  for (const s of parsedSkips) {
+    const id = typeof s.post_id === 'string' ? s.post_id : '';
+    if (!newIds.has(id) || skippedIds.has(id)) continue;
+    skippedIds.add(id);
+    skipped.push({ post_id: id, reason: typeof s.reason === 'string' && s.reason.trim() ? s.reason.trim() : 'no extractable argument' });
   }
 
   const accepted: GroupPartition[] = [];
@@ -92,14 +125,20 @@ export async function partitionPosts(
     accepted.push({ theme, post_ids: [...local], confidence });
     for (const id of local) {
       seenIds.add(id);
-      if (newIds.has(id)) coveredNew.add(id);
+      if (newIds.has(id)) {
+        coveredNew.add(id);
+        skippedIds.delete(id); // partition wins over a contradictory skip
+      }
     }
   }
 
-  // Any new id not covered by an accepted partition (omitted, dropped, or floor-split)
-  // becomes a singleton — every new post is guaranteed exactly one partition.
+  // Resolve contradictions: drop any skip whose id ended up in a partition.
+  const finalSkipped = skipped.filter((s) => skippedIds.has(s.post_id));
+
+  // Any new id neither covered by a partition NOR skipped (omitted, dropped, or floor-split)
+  // becomes a singleton — every new post ends up in exactly one partition OR the skip list.
   for (const p of newPosts) {
-    if (!coveredNew.has(p.id)) accepted.push(singleton(p.id));
+    if (!coveredNew.has(p.id) && !skippedIds.has(p.id)) accepted.push(singleton(p.id));
   }
 
   for (const part of accepted) {
@@ -107,6 +146,9 @@ export async function partitionPosts(
       `[group] theme="${part.theme}" n=${part.post_ids.length} confidence=${part.confidence}`,
     );
   }
+  for (const s of finalSkipped) {
+    console.log(`[group] skip post=${s.post_id} reason="${s.reason}"`);
+  }
 
-  return accepted;
+  return { partitions: accepted, skipped: finalSkipped };
 }

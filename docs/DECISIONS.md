@@ -4,6 +4,91 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+## [2026-06-06] Stage 8 — Fully-automatic ingestion via LinkdAPI (live source mode)
+
+**Status:** Accepted
+
+**Context:**
+Until now ingestion read a hand-curated `seed/posts.json`. Stage 8 adds a live source: poll
+Justin Shriber's LinkedIn posts through LinkdAPI (an unofficial scraper), map them onto the
+existing `Post` contract, and let new posts flow through the same 1:1 + judge pipeline with no
+downstream change. The contract is the seam.
+
+**Decisions:**
+
+- **Fully-automatic ingestion over an editorial paste-a-URL flow.** The product is "raw signal →
+  published artifact, human in the loop." A human pasting each post URL is neither fully automatic
+  (defeats the agentic premise) nor editorial (the human gate is already downstream, at approval).
+  Rejected paste-a-URL as falling between the two stools. The reviewer's judgment belongs at the
+  draft gate, not at ingestion; ingestion should be hands-off and continuous.
+
+- **`SOURCE_MODE` = `seed` (default) | `live`.** The demo must never depend on a third-party
+  scraper being up. `seed` is the deterministic fallback AND the test fixture; `live` is the
+  LinkdAPI path. Same code below the `Post` contract. `npm run pipeline` stays seed; `npm run
+  poll` / `npm run watch` default to live.
+
+- **Unofficial-API ToS/enforcement risk is real and acknowledged.** LinkdAPI scrapes LinkedIn,
+  which violates LinkedIn's ToS; the endpoint can break or get blocked without notice. This is
+  acceptable for a demo on public posts of a consenting subject, but is NOT the production design.
+  **Production = authorized access to the CEO's OWN content** — his LinkedIn OAuth token or a
+  data export. The `Post` contract and `src/ingest/*` adapter boundary mean swapping LinkdAPI for
+  an authorized source is a single-file change. The `seed` fallback is the standing insurance if
+  the scraper dies mid-demo.
+
+- **Polling, not webhooks.** LinkedIn offers no post-publish webhook, so there is nothing to
+  subscribe to — the only option is to poll. `POLL_INTERVAL_MINUTES` defaults to 60 (trial credits
+  are finite; CEO post cadence is hours/days, not seconds). `npm run poll` is a one-shot for the
+  demo; `npm run watch` loops with a reentrancy guard.
+
+- **Triage is the THIRD quality control.** Source quality gates output quality, so curation must
+  be automated when ingestion is. Three independent gates now stack, each catching what the
+  others cannot: (1) **ingestion triage** — deterministic prefilters + a judge skip list drop
+  non-text/thin/promotional posts before they cost a generation; (2) the **rescore loop** —
+  iterates draft quality to overall ≥4; (3) the **human gate** — nothing publishes without
+  approval. A deterministic prefilter cannot tell "thin promo" from "sharp argument" (the judge
+  can); the judge cannot guarantee draft quality (the rescore loop does); neither can be trusted
+  to publish (the human does). False discards are mitigated by logging every skip with a reason
+  and by `seed/groups.json`, which force-includes a post regardless of triage (recovery path).
+
+- **Deterministic prefilter signals (from the live response schema).** `resharedPostContent != null`
+  or a `header` "reposted" annotation → reshare; `mediaContent` present with no substantive text →
+  media-only; text < `MIN_POST_CHARS` (default 400) → too-short (this also catches polls and
+  one-liners — the API exposes no poll type). Each skip is logged with its reason.
+
+- **`/posts/all` omits text for ~1/3 of real posts — backfill from `/posts/info`.** Discovered
+  live: the listing endpoint returned empty `text` for 34/100 posts, including known substantial
+  text posts (the full text lives in the per-post detail endpoint). Discarding them as "too-short"
+  would silently drop a third of real content. Mitigation: `BACKFILL_POST_TEXT` (default on)
+  fetches `/posts/info` for NEW, non-reshare, thin-listing posts before triage. Bounded to new
+  posts (steady-state polling backfills ~0–2/cycle); `MAX_POSTS_PER_CYCLE` caps the cold-start
+  burst. Known limitation documented; `groups.json` is the manual recovery for anything still missed.
+
+- **Discarded posts persist (`status='discarded'` + `discard_reason`) and join the dedup set.**
+  A triaged-out post is kept in the posts table so it is never re-judged (dedup =
+  drafted ∪ discarded) and stays resolvable for roll-ups, with its reason auditable. `id =
+  SHA-256-of-normalized-URL` (shared `src/lib/postId.ts`, same recipe as the seed builder).
+  Consequence: seed URLs (`/posts/..._activity-N`) and live URLs (`/feed/update/...activity:N`)
+  hash differently, so the same logical post has different ids across modes — fine, since one
+  `SOURCE_MODE` runs per deployment and dedup is airtight within a mode.
+
+- **Cross-process status via a `meta` table; `MAX_DRAFTS_PER_CYCLE` for cost.** The watcher
+  (separate process) writes its last-poll result to `meta`; the always-on server reads it at
+  `GET /status` (mirrors the existing Run A/Run B split). `MAX_DRAFTS_PER_CYCLE` caps generation
+  per cycle — guards both finite credits and a first-poll Slack burst (one cold feed → dozens of
+  pings). Capped-but-ungenerated partitions stay active and surface next cycle (intentional;
+  discards persist independent of the cap). API error / quota-exhaustion (detected off the
+  `{success:false}` envelope, not just HTTP status) → log, record, skip cycle, never crash.
+
+- **Triage applies in both modes; seed discards are intentionally NOT sticky.** The judge skip
+  list can fire in `seed` mode too (empty in practice for the curated seed). `syncSeedToDb` upserts
+  every seed row each run and resets `status` to `active` by design — so a judge-discarded SEED
+  post is re-judged next `npm run pipeline` (no duplicate draft, since it was never drafted). In
+  `live` mode discards ARE sticky: ingest skips known ids and never re-upserts a discarded post.
+  The watcher defaults to bounded `MAX_POSTS_PER_CYCLE`/`MAX_DRAFTS_PER_CYCLE` so a bare
+  `npm run poll` against a cold feed cannot burst the full history through generation at once.
+
+---
+
 ## [2026-06-06] Stage 7 — Batch many:1 synthesis with automated grouping
 
 **Status:** Accepted (supersedes the [2026-06-04] 1:1-cardinality decision below)

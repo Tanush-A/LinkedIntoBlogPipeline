@@ -14,6 +14,7 @@ vi.mock('openai', () => ({
 import { randomUUID } from 'node:crypto';
 import { generate } from '../src/pipeline/generate';
 import { insertDraft, getDraft, _resetDbForTesting } from '../src/db';
+import { groupFingerprint } from '../src/lib/fingerprint';
 import {
   MOCK_POST,
   MOCK_EXTRACTED_IDEA,
@@ -55,7 +56,7 @@ function setupFourPassMocks(overrides: { revise?: string } = {}): void {
 describe('generation chain (LLM mocked)', () => {
   it('full chain produces a draft with all expected fields populated', async () => {
     setupFourPassMocks();
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
 
     expect(result.extracted_idea).toMatchObject({
       core_thesis: MOCK_EXTRACTED_IDEA.core_thesis,
@@ -68,13 +69,13 @@ describe('generation chain (LLM mocked)', () => {
 
   it('runs five calls when re-critique scores ≥4 (extract, draft, critique, revise, re-critique)', async () => {
     setupFourPassMocks();
-    await generate(MOCK_POST);
+    await generate([MOCK_POST]);
     expect(mockCreate).toHaveBeenCalledTimes(5);
   });
 
   it('critique is stored as a JSON string, parseable as CritiqueOutput', async () => {
     setupFourPassMocks();
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
 
     expect(() => JSON.parse(result.critique)).not.toThrow();
     const parsed = JSON.parse(result.critique) as Record<string, unknown>;
@@ -85,21 +86,21 @@ describe('generation chain (LLM mocked)', () => {
 
   it('extracted_idea is an object (not a string) after the chain', async () => {
     setupFourPassMocks();
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
     expect(typeof result.extracted_idea).toBe('object');
     expect(result.extracted_idea.core_thesis).toBeTruthy();
   });
 
   it('throws if extract pass returns null content', async () => {
     mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: null } }] });
-    await expect(generate(MOCK_POST)).rejects.toThrow('extract pass returned null content');
+    await expect(generate([MOCK_POST])).rejects.toThrow('extract pass returned null content');
   });
 
   it('throws if draft pass returns null content', async () => {
     mockCreate
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_EXTRACTED_IDEA) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: null } }] });
-    await expect(generate(MOCK_POST)).rejects.toThrow('draft pass returned null content');
+    await expect(generate([MOCK_POST])).rejects.toThrow('draft pass returned null content');
   });
 
   it('throws if critique pass returns null content', async () => {
@@ -107,7 +108,7 @@ describe('generation chain (LLM mocked)', () => {
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_EXTRACTED_IDEA) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: MOCK_RAW_DRAFT } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: null } }] });
-    await expect(generate(MOCK_POST)).rejects.toThrow('critique pass returned null content');
+    await expect(generate([MOCK_POST])).rejects.toThrow('critique pass returned null content');
   });
 
   it('throws if revise pass returns null content', async () => {
@@ -116,7 +117,7 @@ describe('generation chain (LLM mocked)', () => {
       .mockResolvedValueOnce({ choices: [{ message: { content: MOCK_RAW_DRAFT } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(MOCK_CRITIQUE) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: null } }] });
-    await expect(generate(MOCK_POST)).rejects.toThrow('revise pass returned null content');
+    await expect(generate([MOCK_POST])).rejects.toThrow('revise pass returned null content');
   });
 });
 
@@ -130,12 +131,13 @@ describe('verification DB round-trip', () => {
     setupFourPassMocks({
       revise: 'TITLE: Revenue Clarity\n\nThis post delves into why forecasting fails.',
     });
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
 
     const draftId = randomUUID();
     insertDraft({
       id: draftId,
-      source_post_id: MOCK_POST.id,
+      source_post_ids: [MOCK_POST.id],
+      group_fingerprint: groupFingerprint([MOCK_POST.id]),
       status: 'pending',
       revision_count: 0,
       ...result,
@@ -151,12 +153,13 @@ describe('verification DB round-trip', () => {
     setupFourPassMocks({
       revise: 'TITLE: ROI Selling\n\nROI-first pitches close at 3.1x the rate of feature-led ones.',
     });
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
 
     const draftId = randomUUID();
     insertDraft({
       id: draftId,
-      source_post_id: MOCK_POST.id,
+      source_post_ids: [MOCK_POST.id],
+      group_fingerprint: groupFingerprint([MOCK_POST.id]),
       status: 'pending',
       revision_count: 0,
       ...result,
@@ -174,12 +177,13 @@ describe('verification DB round-trip', () => {
         'TITLE: The Real Cost of Forecast Drift\n\n' +
         'Forecasting is a management discipline, not a finance deliverable.',
     });
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
 
     const draftId = randomUUID();
     insertDraft({
       id: draftId,
-      source_post_id: MOCK_POST.id,
+      source_post_ids: [MOCK_POST.id],
+      group_fingerprint: groupFingerprint([MOCK_POST.id]),
       status: 'pending',
       revision_count: 0,
       ...result,
@@ -203,7 +207,7 @@ describe('re-score loop', () => {
   it('scores ≥4 on first re-critique → loop exits, no extra revise (5 calls)', async () => {
     // Default RESCORE_CAP=3; setupFourPassMocks already includes the re-critique → overall=4.
     setupFourPassMocks();
-    await generate(MOCK_POST);
+    await generate([MOCK_POST]);
     expect(mockCreate).toHaveBeenCalledTimes(5);
   });
 
@@ -227,7 +231,7 @@ describe('re-score loop', () => {
       // iter 2: re-critique(4) → break
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(c4) } }] });
 
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
     expect(mockCreate).toHaveBeenCalledTimes(9);
     // bestDraft = v3 (scored 4 in iter 2)
     expect(result.revised_draft).toBe('TITLE: V3\n\nV3 content.');
@@ -252,7 +256,7 @@ describe('re-score loop', () => {
       // iter 1: re-critique(1) → 1>3? NO. cap reached → break
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(c1) } }] });
 
-    const result = await generate(MOCK_POST);
+    const result = await generate([MOCK_POST]);
     expect(mockCreate).toHaveBeenCalledTimes(7);
     // Best was v1 (score=3), not v2 (score=1)
     expect(result.revised_draft).toBe('TITLE: V1\n\nV1 content.');

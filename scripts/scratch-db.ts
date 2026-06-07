@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { groupFingerprint } from '../src/lib/fingerprint';
 
 async function main() {
   // Set BEFORE importing db.ts, which reads DATABASE_URL at module load.
@@ -34,7 +35,8 @@ async function main() {
   // ---- insert ----
   const inserted = insertDraft({
     id,
-    source_post_id: 'linkedin-post-abc123',
+    source_post_ids: ['linkedin-post-abc123'],
+    group_fingerprint: groupFingerprint(['linkedin-post-abc123']),
     status: 'pending',
     revision_count: 0,
     extracted_idea: {
@@ -43,6 +45,7 @@ async function main() {
       target_audience: 'enterprise CROs managing 50+ reps',
       angle: 'The metric everyone tracks is the one that hides the problem.',
       do_not_reuse: ['some signature phrase'],
+      tension: 'The activity metrics that feel like progress are the ones hiding the real problem.',
     },
     raw_draft: 'RAW DRAFT BODY',
     critique, // already a JSON string per the Draft contract
@@ -55,7 +58,7 @@ async function main() {
   assert.ok(got, 'getDraft should return the inserted row');
 
   assert.equal(got.id, id, 'id round-trips');
-  assert.equal(got.source_post_id, 'linkedin-post-abc123', 'source_post_id round-trips');
+  assert.deepEqual(got.source_post_ids, ['linkedin-post-abc123'], 'source_post_ids round-trips');
   assert.equal(got.status, 'pending', 'status round-trips');
   assert.equal(got.revision_count, 0, 'revision_count round-trips');
 

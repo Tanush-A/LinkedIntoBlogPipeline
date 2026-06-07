@@ -7,12 +7,13 @@ import { randomUUID } from 'node:crypto';
 import posts from '../seed/posts.json';
 import { generate } from '../src/pipeline/generate';
 import { insertDraft, getDraft } from '../src/db';
+import { groupFingerprint } from '../src/lib/fingerprint';
 
 async function main() {
   const post = posts[0];
   console.log(`\n[scratch] Using post: ${post.id} — "${post.text.slice(0, 60)}..."\n`);
 
-  const result = await generate(post);
+  const result = await generate([post]);
 
   console.log('\n─── extracted_idea ──────────────────────────────────────');
   console.log(JSON.stringify(result.extracted_idea, null, 2));
@@ -28,7 +29,8 @@ async function main() {
   const id = randomUUID();
   insertDraft({
     id,
-    source_post_id: post.id,
+    source_post_ids: [post.id],
+    group_fingerprint: groupFingerprint([post.id]),
     status: 'pending',
     revision_count: 0,
     extracted_idea: result.extracted_idea,

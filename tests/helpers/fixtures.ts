@@ -4,10 +4,13 @@
 import { randomUUID } from 'node:crypto';
 import type { ExtractedIdea, CritiqueOutput, Post } from '../../src/types';
 import type { DraftInsert } from '../../src/db';
+import { groupFingerprint } from '../../src/lib/fingerprint';
 
 // First post in seed/posts.json — must match a real ID so regenerate.ts can
-// loadPost() from the seed file without throwing.
+// loadPosts() it from the posts table (seed-synced in tests/setup.ts) without throwing.
 export const SEED_POST_ID = 'd6456cd37b98';
+// A second real seed id — for pillar / multi-post fixtures.
+export const SEED_POST_ID_2 = '24b7e159d3d4';
 
 export const MOCK_POST: Post = {
   id: SEED_POST_ID,
@@ -62,9 +65,11 @@ export const DEVTO_MOCK_RESPONSE = {
 };
 
 export function makeDraft(overrides: Partial<DraftInsert> = {}): DraftInsert {
+  const source_post_ids = overrides.source_post_ids ?? [SEED_POST_ID];
   return {
     id: randomUUID(),
-    source_post_id: SEED_POST_ID,
+    source_post_ids,
+    group_fingerprint: groupFingerprint(source_post_ids),
     status: 'pending',
     revision_count: 0,
     revised_draft: MOCK_REVISED_DRAFT,

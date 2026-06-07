@@ -9,12 +9,13 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import OpenAI from 'openai';
-import type { Post, ExtractedIdea, CritiqueOutput, VerificationResult } from '../types';
+import type { Post, ExtractedIdea, CritiqueOutput, VerificationResult, PublishedRef } from '../types';
 import { buildExtractionMessages } from '../../prompts/extract';
 import { buildDraftMessages } from '../../prompts/draft';
 import { buildCritiqueMessages } from '../../prompts/critique';
 import { buildReviseMessages } from '../../prompts/revise';
 import { verifyDraft } from '../lib/verify';
+import { PRODUCT_CONTEXT_BLOCK } from '../config/brand';
 
 export interface GenerateResult {
   extracted_idea: ExtractedIdea;
@@ -30,35 +31,45 @@ function requireContent(content: string | null, pass: string): string {
   return content;
 }
 
-export async function generate(post: Post): Promise<GenerateResult> {
+export async function generate(
+  posts: Post[],
+  publishedRefs: PublishedRef[] = [],
+): Promise<GenerateResult> {
   // Instantiate after dotenv has loaded (called from run.ts which imports dotenv/config).
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  // Read per call so tests can override via process.env.RESCORE_CAP.
+  // Read per call so tests can override via process.env.RESCORE_CAP / OPENAI_MODEL*.
   const RESCORE_CAP = parseInt(process.env.RESCORE_CAP ?? '3', 10);
+  const MODEL = process.env.OPENAI_MODEL ?? 'gpt-5.5';
+  const MODEL_EXTRACT = process.env.OPENAI_MODEL_EXTRACT ?? 'gpt-5.4-mini';
 
-  // ── Pass 1: Extract ─────────────────────────────────────────────────────────
-  console.log(`[generate] extract  post=${post.id}`);
+  // Partition identity for logs/artifacts: first id + size (n=1 is the 1:1 case).
+  const postLabel = posts.map((p) => p.id).join('+');
+  const artifactBase = `${posts[0].id}-n${posts.length}`;
+
+  // ── Pass 1: Extract (all source posts → one unified idea) ───────────────────
+  console.log(`[generate] extract  post=${postLabel}`);
   const extractResp = await client.chat.completions.create({
-    model: 'gpt-4o',
+    model: MODEL_EXTRACT,
     response_format: { type: 'json_object' },
-    messages: buildExtractionMessages(post),
+    messages: buildExtractionMessages(posts),
   });
   const extracted: ExtractedIdea = JSON.parse(
     requireContent(extractResp.choices[0].message.content, 'extract'),
   );
 
   // ── Pass 2: Draft ───────────────────────────────────────────────────────────
-  console.log(`[generate] draft    post=${post.id}`);
+  console.log(`[generate] draft    post=${postLabel}`);
   const draftResp = await client.chat.completions.create({
-    model: 'gpt-4o',
-    messages: buildDraftMessages(post, extracted),
+    model: MODEL,
+    max_completion_tokens: 4000,
+    messages: buildDraftMessages(posts, extracted, PRODUCT_CONTEXT_BLOCK, publishedRefs),
   });
   const raw_draft = requireContent(draftResp.choices[0].message.content, 'draft');
 
   // ── Pass 3: Critique (of raw_draft) ─────────────────────────────────────────
-  console.log(`[generate] critique post=${post.id}`);
+  console.log(`[generate] critique post=${postLabel}`);
   const critiqueResp = await client.chat.completions.create({
-    model: 'gpt-4o',
+    model: MODEL,
     response_format: { type: 'json_object' },
     messages: buildCritiqueMessages(raw_draft),
   });
@@ -67,9 +78,10 @@ export async function generate(post: Post): Promise<GenerateResult> {
   );
 
   // ── Pass 4: Revise ──────────────────────────────────────────────────────────
-  console.log(`[generate] revise   post=${post.id}`);
+  console.log(`[generate] revise   post=${postLabel}`);
   const reviseResp = await client.chat.completions.create({
-    model: 'gpt-4o',
+    model: MODEL,
+    max_completion_tokens: 4000,
     messages: buildReviseMessages(raw_draft, initialCritiqueObj),
   });
   const initialRevised = requireContent(reviseResp.choices[0].message.content, 'revise');
@@ -86,7 +98,7 @@ export async function generate(post: Post): Promise<GenerateResult> {
 
   for (let iter = 0; iter < RESCORE_CAP; iter++) {
     const rescoreResp = await client.chat.completions.create({
-      model: 'gpt-4o',
+      model: MODEL,
       response_format: { type: 'json_object' },
       messages: buildCritiqueMessages(currentDraft),
     });
@@ -96,7 +108,7 @@ export async function generate(post: Post): Promise<GenerateResult> {
 
     const isNewBest = rescoreObj.overall > bestScore;
     console.log(
-      `[generate] rescore  post=${post.id}` +
+      `[generate] rescore  post=${postLabel}` +
       ` iter=${iter + 1}/${RESCORE_CAP}` +
       ` overall=${rescoreObj.overall}` +
       (isNewBest ? ' (new best)' : ''),
@@ -112,7 +124,7 @@ export async function generate(post: Post): Promise<GenerateResult> {
           .map(([k, v]) => `${k}: ${v}`)
           .join(', ');
         const fileContent =
-          `# Rescore iter ${iter + 1} — post ${post.id}\n\n` +
+          `# Rescore iter ${iter + 1} — post ${postLabel}\n\n` +
           `**Overall: ${rescoreObj.overall}/5** (${scoreDetail})\n\n` +
           `## Problems\n\n` +
           `${rescoreObj.problems.map((p) => `- ${p}`).join('\n') || '_none_'}\n\n` +
@@ -121,7 +133,7 @@ export async function generate(post: Post): Promise<GenerateResult> {
           `## Draft\n\n` +
           `${currentDraft}\n`;
         writeFileSync(
-          resolve(evalDir, `${post.id}-iter-${iter + 1}.md`),
+          resolve(evalDir, `${artifactBase}-iter-${iter + 1}.md`),
           fileContent,
           'utf-8',
         );
@@ -142,7 +154,8 @@ export async function generate(post: Post): Promise<GenerateResult> {
 
     // Re-revise with this critique and loop again
     const reReviseResp = await client.chat.completions.create({
-      model: 'gpt-4o',
+      model: MODEL,
+      max_completion_tokens: 4000,
       messages: buildReviseMessages(currentDraft, rescoreObj),
     });
     currentDraft = requireContent(
@@ -152,10 +165,11 @@ export async function generate(post: Post): Promise<GenerateResult> {
   }
 
   // ── Verify (deterministic — no LLM) ─────────────────────────────────────────
-  // Pass the source post text so figures the author cited are treated as grounded.
-  const verification = verifyDraft(bestDraft, [post.text]);
+  // Grounding corpus = ALL source posts in the group, so a figure cited by ANY of them
+  // is treated as grounded (not a false-positive ungrounded flag).
+  const verification = verifyDraft(bestDraft, posts.map((p) => p.text));
   console.log(
-    `[generate] verify   post=${post.id}` +
+    `[generate] verify   post=${postLabel}` +
     ` passed=${verification.passed}` +
     ` banned=${verification.bannedTerms.length}` +
     ` ungrounded=${verification.ungroundedNumbers.length}`,

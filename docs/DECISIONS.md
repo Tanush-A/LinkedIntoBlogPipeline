@@ -4,6 +4,118 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+## [2026-06-06] Stage 7 — Batch many:1 synthesis with automated grouping
+
+**Status:** Accepted (supersedes the [2026-06-04] 1:1-cardinality decision below)
+
+**Context:**
+1:1 (one LinkedIn post → one blog) published redundant pieces: 3 of 8 seed posts share the
+"unify your revenue data" thesis, so 1:1 ships 3 near-duplicate blogs. A real marketing team
+writes one pillar piece from a theme. This stage adds a grouping judge that partitions each
+batch into theme groups (n≥2 → one pillar draft) and singletons (n=1 → the existing 1:1 draft).
+1:1 is now the n=1 case of the same code path — nothing about the gate, publish, or idempotency
+guarantees changed.
+
+**Decisions:**
+
+- **Batch partition over per-arrival streaming.** One judge call sees the WHOLE batch and
+  partitions it at once, rather than judging each post against the registry as it arrives.
+  Why: (1) it matches the real ingestion cadence — posts are polled in batches, not streamed
+  one-at-a-time; (2) a single judge call with the whole batch in context makes globally coherent
+  grouping decisions a per-arrival judge can't (it would commit to a singleton before seeing the
+  post that should have grouped with it); (3) it collapses the redundant "1:1 draft now, pillar
+  draft later" noise within a batch into one decision. Rejected: per-arrival streaming with a
+  sliding window + periodic consolidation pass — that is the production evolution (mapped in
+  SPEC §13), and the fingerprint model already supports it (attachment = new fingerprint =
+  roll-up), but it is not needed at batch/demo cadence and adds windowing state.
+
+- **Auto-act on the judge's grouping; the human gate catches false positives.** The judge groups
+  and the pipeline generates ONE draft per partition without a human confirming the grouping
+  first. Why: the existing non-negotiable ("nothing publishes without approval") already puts a
+  human in front of every pillar draft — a bad group surfaces as an incoherent draft the reviewer
+  rejects, exactly like any other weak draft. Adding a separate "approve the grouping" step would
+  double the human touchpoints for no extra safety. A confidence floor (default 0.6) splits
+  weak groups back into singletons before they ever reach generation. Rejected: a human grouping-
+  approval gate before generation (redundant with the content gate).
+
+- **Group identity = sha256 of sorted member ids; idempotency keys on it.** `group_fingerprint`
+  replaces per-post dedup. Re-running the same batch produces the same fingerprints → existing
+  drafts → no-ops (exactly like the old per-`source_post_id` dedup). A later batch that attaches
+  a new post to a prior theme produces a partition with changed membership → a NEW fingerprint →
+  a new roll-up draft. The old draft (possibly already published) is immutable and left intact;
+  the roll-up complements it. Rejected: mutable groups (a published draft would have to be
+  re-opened and re-gated — breaks draft immutability and the terminal-`published` guarantee).
+
+- **Rejected: embedding-threshold grouping.** Clustering by cosine similarity over post
+  embeddings with a fixed distance threshold was rejected as the grouping mechanism. Why: a
+  similarity threshold groups on surface topic overlap ("both mention AI") — it cannot tell a
+  coherent shared *thesis* (groupable into one argument) from two posts that merely share
+  vocabulary (not groupable). The judge reasons about editorial coherence, which is the actual
+  grouping criterion. Embeddings remain the right PRODUCTION PREFILTER (cluster candidates →
+  judge confirms/labels only the candidates, cutting judge tokens ~10x and scaling past context
+  limits) — mapped in SPEC §13, not built; at seed scale one judge call sees the whole batch.
+
+- **Judge is untrusted input: deterministic validation, fail-open to singletons.** The judge's
+  JSON is re-validated in code — every new post id must be covered exactly once; partitions with
+  an unknown id, a duplicated id, or only existing-member ids are dropped and their NEW ids
+  re-covered as singletons; groups below the confidence floor are split (re-covering NEW ids only
+  — existing members simply drop out, never minting a draft for a post that existed only inside a
+  prior group). ANY judge failure (API error, unparseable JSON) falls open to all-singletons.
+  Generation is never blocked by grouping.
+
+- **Legacy `source_post_id` column kept and compat-written.** Reads go exclusively through the
+  new `source_post_ids` JSON array; the legacy NOT-NULL column on existing DBs is written
+  `source_post_ids[0]` on insert so old databases don't reject the row. A JS backfill at startup
+  fills `source_post_ids`/`group_fingerprint` for pre-existing rows (ALTER TABLE can't add NOT
+  NULL columns without a default). A full table rebuild is the clean production migration —
+  documented, not built (acceptable for SQLite at this scale).
+
+- **Canonical posts table; seed file is just a source that feeds it.** `posts` (id, url, author,
+  text, posted_at, ingested_at) is the canonical post store. Ingest upserts every post it sees;
+  `loadPosts` and the judge's existing-theme member summaries read from the table, not the seed
+  file. Why: live ingestion lands next session and needs this seam — the seed file becomes one
+  feeder among many. Migration: the seed is upserted into the table on startup/ingest.
+
+- **`splitTitleAndBody` moved to `src/lib/text.ts`.** `db.getPublishedRefs` needs the title and
+  `publish.ts` needs the same splitter; importing it from publish into db is a circular
+  dependency. A pure text module both import is the clean seam.
+
+- **Self-canonical cluster linking.** Every piece stays self-canonical (dev.to default). The
+  topic-cluster signal is the internal links themselves: a pillar draft receives the
+  `PublishedRef`s whose source posts overlap its partition and links DOWN to them as deeper dives.
+  Spoke→pillar back-links are a future edit (mapped, not built).
+
+---
+
+- [2026-06-05] Decision: swap generation chain from GPT-4o to GPT-5.5; make model env-configurable.
+  Chose: `OPENAI_MODEL=gpt-5.5` (flagship, verified via GET /v1/models; `gpt-5.5-2026-04-23` is the
+  dated pin) for draft/critique/revise; `OPENAI_MODEL_EXTRACT=gpt-5.4-mini` for the extract pass
+  (simple structured JSON extraction doesn't need the flagship). Both default to these values if
+  env vars are absent. GPT-4o was the original choice during Stage 2; model deprecation is a real
+  operational dependency — production systems that hardcode a model string require a code change
+  per upgrade; env-configurable swaps take only a config change.
+  API change: gpt-5.x does not accept `max_tokens` — changed to `max_completion_tokens` everywhere.
+  `response_format: { type: 'json_object' }` and response shape are unchanged.
+  Rejected: gpt-5.4 — gpt-5.5 (2026-04-23) is the newer, higher-capability release confirmed
+  available on this key. Rejected: gpt-5.5-pro — pro variant is disproportionate cost for
+  text-only essay generation; flagship is sufficient.
+
+- [2026-06-05] Decision: pass PRODUCT_CONTEXT_BLOCK to buildDraftMessages as third argument.
+  Chose: import PRODUCT_CONTEXT_BLOCK in generate.ts and thread it through to buildDraftMessages(post, extracted, PRODUCT_CONTEXT_BLOCK). The function signature already required a third parameter — the call site was the gap.
+  Rejected: reading product_context directly from BRAND.product_context in generate.ts — PRODUCT_CONTEXT_BLOCK is the canonical formatted export and the prompt expects that wrapper text.
+
+- [2026-06-05] Decision: raise max_tokens to 4000 on draft and all revise calls.
+  Chose: max_tokens: 4000 on draft pass, Pass 4 revise pass, and re-revise in rescore loop. Target 1,200–1,800 words ≈ 1,800–2,700 output tokens; previous default was likely 1,024 or unlimit-but-shared-budget, both risky for truncation.
+  Rejected: only setting it on the first revise pass — the re-revise in the rescore loop is the same task and must not truncate either.
+
+- [2026-06-05] Decision: TITLE parsing confirmed intact, no changes needed.
+  Chose: leave publish.ts splitTitleAndBody() and approval.ts TITLE: extraction untouched. The revise prompt still emits "TITLE: <title>\n\n<body>"; both parsers handle it correctly. publish.test.ts exercises the TITLE: path end-to-end — no additional unit test added.
+  Rejected: extracting splitTitleAndBody into a shared utility — premature; only two call sites, both stable.
+
+- [2026-06-05] Decision: doc sync — no stale references found.
+  Chose: no edits to SPEC.md or CLAUDE.md. Neither file contained "800–950 words" or "question-template structure" references; the doc sync instruction described a condition that does not exist in the current files.
+  Rejected: adding the new essay design description as new prose — docs are not yet stale, so adding would create duplication risk.
+
 - [2026-06-05] Decision: source-post figures are grounded; demo figures are not, even in source.
   Chose: `verifyDraft(draftText, sourcePosts: string[] = [])` — figures present in the source
   post text(s) are added to the grounding corpus so the draft can cite a number the original
@@ -78,6 +190,8 @@ Decisions are recorded in reverse chronological order.
 - [2026-06-05] Stage 6 — `splitTitleAndBody` TITLE: check not matching in running server. Chose: fix title via PUT to dev.to API. Rejected: restarting server mid-demo (unnecessary friction for the live example). Why: the approval server (PID 7586) loaded an older version of `publish.ts` (the file has uncommitted changes — `M src/pipeline/publish.ts` in git status). The compiled-at-startup code lacked the TITLE: stripping. Fix: commit pending changes to publish.ts before starting the server.
 
 - [2026-06-04] Decision: post→blog mapping cardinality. Chose: 1:1 (one LinkedIn post → one blog).
+  **[SUPERSEDED 2026-06-06 — batch many:1 synthesis shipped; see the Stage 7 block at the top of
+  this log. 1:1 is now the n=1 case of the synthesis design, not a separate mode.]**
   Rejected: many:1 theme-synthesis (cluster related posts → one pillar post). Why: 1:1 gives a
   clean, idempotent, demonstrable loop and was buildable in the time available. Synthesis is the
   better product — a real marketing team writes pillar pieces from a theme, not a blog per post —

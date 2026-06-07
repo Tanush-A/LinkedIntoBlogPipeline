@@ -13,7 +13,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import type { Draft, DraftStatus, ExtractedIdea, EvalScores, VerificationResult } from './types';
+import type {
+  Draft,
+  DraftStatus,
+  ExtractedIdea,
+  EvalScores,
+  VerificationResult,
+  Post,
+  PublishedRef,
+} from './types';
+import { groupFingerprint } from './lib/fingerprint';
+import { splitTitleAndBody } from './lib/text';
 
 const DB_PATH = process.env.DATABASE_URL ?? './db/pipeline.sqlite';
 
@@ -40,35 +50,75 @@ const STATUSES: DraftStatus[] = [
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS drafts (
-    id              TEXT PRIMARY KEY,
-    source_post_id  TEXT NOT NULL,
-    status          TEXT NOT NULL CHECK (status IN (${STATUSES.map((s) => `'${s}'`).join(', ')})),
-    revision_count  INTEGER NOT NULL DEFAULT 0,
-    reviewer_note   TEXT,
-    extracted_idea  TEXT,   -- JSON(ExtractedIdea)
-    raw_draft       TEXT,
-    critique        TEXT,   -- JSON string of CritiqueOutput (already stringified by caller)
-    revised_draft   TEXT,
-    cms_url         TEXT,   -- NULL is the publish() idempotency guard
-    eval_scores     TEXT,   -- JSON(EvalScores)
-    verification    TEXT,   -- JSON(VerificationResult)
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
+    id               TEXT PRIMARY KEY,
+    source_post_id   TEXT,             -- LEGACY: kept to avoid a table rebuild; see migration
+    source_post_ids  TEXT NOT NULL,    -- JSON array of post ids
+    group_fingerprint TEXT NOT NULL,   -- sha256 of sorted source_post_ids (dedup key)
+    theme            TEXT,
+    status           TEXT NOT NULL CHECK (status IN (${STATUSES.map((s) => `'${s}'`).join(', ')})),
+    revision_count   INTEGER NOT NULL DEFAULT 0,
+    reviewer_note    TEXT,
+    extracted_idea   TEXT,   -- JSON(ExtractedIdea)
+    raw_draft        TEXT,
+    critique         TEXT,   -- JSON string of CritiqueOutput (already stringified by caller)
+    revised_draft    TEXT,
+    cms_url          TEXT,   -- NULL is the publish() idempotency guard
+    eval_scores      TEXT,   -- JSON(EvalScores)
+    verification     TEXT,   -- JSON(VerificationResult)
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
   );
 `);
 
-// Migration for existing db/pipeline.sqlite: CREATE TABLE IF NOT EXISTS is a no-op
-// on an existing table, so the verification column must be added separately.
-// SQLite does not support ALTER TABLE ADD COLUMN IF NOT EXISTS — swallow the
-// "duplicate column name" error that fires when the migration has already run.
-try {
-  db.exec(`ALTER TABLE drafts ADD COLUMN verification TEXT`);
-} catch {
-  // Column already exists — migration already applied.
+// posts table — the canonical post store. ingest upserts every post it sees
+// (seed file feeds it now; live ingestion lands here next). loadPosts and the
+// judge's existing-group member summaries read from this table, NOT the seed file.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS posts (
+    id          TEXT PRIMARY KEY,
+    url         TEXT NOT NULL,
+    author      TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    posted_at   TEXT,
+    ingested_at TEXT NOT NULL
+  );
+`);
+
+// Migrations for existing db/pipeline.sqlite: CREATE TABLE IF NOT EXISTS is a no-op
+// on an existing table, so new columns must be added separately. SQLite does not
+// support ALTER TABLE ADD COLUMN IF NOT EXISTS — swallow the "duplicate column name"
+// error that fires when a migration has already run.
+for (const ddl of [
+  `ALTER TABLE drafts ADD COLUMN verification TEXT`,
+  `ALTER TABLE drafts ADD COLUMN source_post_ids TEXT`,
+  `ALTER TABLE drafts ADD COLUMN group_fingerprint TEXT`,
+  `ALTER TABLE drafts ADD COLUMN theme TEXT`,
+]) {
+  try {
+    db.exec(ddl);
+  } catch {
+    // Column already exists — migration already applied.
+  }
 }
 
-// Ingest dedups by querying for an existing source_post_id — index that lookup.
+// JS backfill for rows that predate the source_post_ids column (runs once; no-op
+// afterwards). ALTER TABLE cannot add NOT NULL columns to an existing table without a
+// default, so the new columns land nullable on old DBs — this closes that gap at startup.
+// A full table rebuild is the clean production migration (documented in the decision log,
+// not built — acceptable for SQLite at this scale).
+const legacyRows = db
+  .prepare(`SELECT id, source_post_id FROM drafts WHERE source_post_ids IS NULL`)
+  .all() as { id: string; source_post_id: string | null }[];
+for (const r of legacyRows) {
+  const ids = r.source_post_id ? [r.source_post_id] : [];
+  db.prepare(`UPDATE drafts SET source_post_ids = ?, group_fingerprint = ? WHERE id = ?`)
+    .run(JSON.stringify(ids), groupFingerprint(ids), r.id);
+}
+
+// Dedup now keys on group_fingerprint — index that lookup. The old source_post_id index
+// is kept (harmless) so legacy queries against the legacy column stay fast.
 db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_source_post_id ON drafts (source_post_id);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_group_fingerprint ON drafts (group_fingerprint);`);
 
 // ---------------------------------------------------------------------------
 // Row <-> Draft mapping
@@ -77,7 +127,10 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_source_post_id ON drafts (source_
 /** Raw shape as stored in SQLite: absent optionals are NULL, object columns are JSON text. */
 interface DraftRow {
   id: string;
-  source_post_id: string;
+  source_post_id: string | null;       // legacy column, never read into Draft
+  source_post_ids: string | null;      // JSON array
+  group_fingerprint: string | null;
+  theme: string | null;
   status: string;
   revision_count: number;
   reviewer_note: string | null;
@@ -95,6 +148,9 @@ interface DraftRow {
 /** Columns a caller may write (everything except the `id` primary key). */
 type WritableColumn =
   | 'source_post_id'
+  | 'source_post_ids'
+  | 'group_fingerprint'
+  | 'theme'
   | 'status'
   | 'revision_count'
   | 'reviewer_note'
@@ -109,7 +165,12 @@ type WritableColumn =
   | 'updated_at';
 
 /** Object columns serialized to JSON on write and parsed on read. */
-const JSON_COLUMNS = new Set<WritableColumn>(['extracted_idea', 'eval_scores', 'verification']);
+const JSON_COLUMNS = new Set<WritableColumn>([
+  'source_post_ids',
+  'extracted_idea',
+  'eval_scores',
+  'verification',
+]);
 
 /** Coerce a Draft field to a value better-sqlite3 will accept (string | number | null). */
 function toBind(column: WritableColumn, value: unknown): string | number | null {
@@ -122,7 +183,9 @@ function toBind(column: WritableColumn, value: unknown): string | number | null 
 function rowToDraft(row: DraftRow): Draft {
   return {
     id: row.id,
-    source_post_id: row.source_post_id,
+    source_post_ids: row.source_post_ids ? (JSON.parse(row.source_post_ids) as string[]) : [],
+    group_fingerprint: row.group_fingerprint ?? '',
+    ...(row.theme != null ? { theme: row.theme } : {}),
     status: row.status as DraftStatus,
     revision_count: row.revision_count,
     ...(row.reviewer_note != null ? { reviewer_note: row.reviewer_note } : {}),
@@ -157,12 +220,14 @@ export type DraftUpdate = Partial<Omit<Draft, 'id' | 'created_at'>>;
 
 const insertStmt = db.prepare(`
   INSERT INTO drafts (
-    id, source_post_id, status, revision_count, reviewer_note,
+    id, source_post_id, source_post_ids, group_fingerprint, theme,
+    status, revision_count, reviewer_note,
     extracted_idea, raw_draft, critique, revised_draft, cms_url, eval_scores,
     verification,
     created_at, updated_at
   ) VALUES (
-    @id, @source_post_id, @status, @revision_count, @reviewer_note,
+    @id, @source_post_id, @source_post_ids, @group_fingerprint, @theme,
+    @status, @revision_count, @reviewer_note,
     @extracted_idea, @raw_draft, @critique, @revised_draft, @cms_url, @eval_scores,
     @verification,
     @created_at, @updated_at
@@ -173,7 +238,11 @@ export function insertDraft(input: DraftInsert): Draft {
   const now = new Date().toISOString();
   insertStmt.run({
     id: input.id,
-    source_post_id: toBind('source_post_id', input.source_post_id),
+    // Compat write: the legacy NOT-NULL column on old DBs needs a value. Nothing reads it.
+    source_post_id: toBind('source_post_id', input.source_post_ids[0] ?? null),
+    source_post_ids: toBind('source_post_ids', input.source_post_ids),
+    group_fingerprint: toBind('group_fingerprint', input.group_fingerprint),
+    theme: toBind('theme', input.theme),
     status: toBind('status', input.status),
     revision_count: toBind('revision_count', input.revision_count ?? 0),
     reviewer_note: toBind('reviewer_note', input.reviewer_note),
@@ -200,20 +269,145 @@ export function getDraft(id: string): Draft | undefined {
   return row ? rowToDraft(row) : undefined;
 }
 
-const getBySourcePostIdStmt = db.prepare(
-  `SELECT * FROM drafts WHERE source_post_id = ? ORDER BY created_at DESC LIMIT 1`,
+const getByFingerprintStmt = db.prepare(
+  `SELECT * FROM drafts WHERE group_fingerprint = ? ORDER BY created_at DESC LIMIT 1`,
 );
 
-export function getDraftBySourcePostId(sourcePostId: string): Draft | undefined {
-  const row = getBySourcePostIdStmt.get(sourcePostId) as DraftRow | undefined;
+/** The dedup lookup: does a draft already exist for this exact group membership? */
+export function getDraftByFingerprint(fp: string): Draft | undefined {
+  const row = getByFingerprintStmt.get(fp) as DraftRow | undefined;
   return row ? rowToDraft(row) : undefined;
 }
 
-/** Columns updateDraft accepts — every writable column except the auto-managed timestamps. */
-type UpdatableColumn = Exclude<WritableColumn, 'created_at' | 'updated_at'>;
+/** Every post id referenced by any draft — the "known posts" set for ingest dedup. */
+export function getAllSourcePostIds(): Set<string> {
+  const rows = db.prepare(`SELECT source_post_ids FROM drafts`).all() as {
+    source_post_ids: string | null;
+  }[];
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (!r.source_post_ids) continue;
+    for (const id of JSON.parse(r.source_post_ids) as string[]) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * One record per distinct group (most recent draft per fingerprint), any status.
+ * The judge receives these as EXISTING THEMES so it can attach new posts (roll-up).
+ */
+export function getGroupRecords(): {
+  theme: string | null;
+  source_post_ids: string[];
+  group_fingerprint: string;
+}[] {
+  const rows = db
+    .prepare(
+      `SELECT theme, source_post_ids, group_fingerprint FROM drafts ORDER BY created_at DESC`,
+    )
+    .all() as { theme: string | null; source_post_ids: string | null; group_fingerprint: string | null }[];
+  const seen = new Set<string>();
+  const out: { theme: string | null; source_post_ids: string[]; group_fingerprint: string }[] = [];
+  for (const r of rows) {
+    if (!r.group_fingerprint || seen.has(r.group_fingerprint)) continue;
+    seen.add(r.group_fingerprint);
+    out.push({
+      theme: r.theme,
+      source_post_ids: r.source_post_ids ? (JSON.parse(r.source_post_ids) as string[]) : [],
+      group_fingerprint: r.group_fingerprint,
+    });
+  }
+  return out;
+}
+
+/** Published pieces for topic-cluster linking in pillar drafts. */
+export function getPublishedRefs(): PublishedRef[] {
+  const rows = db
+    .prepare(
+      `SELECT revised_draft, cms_url, source_post_ids FROM drafts
+       WHERE status = 'published' AND cms_url IS NOT NULL`,
+    )
+    .all() as { revised_draft: string | null; cms_url: string; source_post_ids: string | null }[];
+  return rows.map((r) => ({
+    title: splitTitleAndBody(r.revised_draft ?? '').title,
+    cms_url: r.cms_url,
+    source_post_ids: r.source_post_ids ? (JSON.parse(r.source_post_ids) as string[]) : [],
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// posts table — canonical post store (seed feeds it; live ingestion lands here)
+// ---------------------------------------------------------------------------
+
+interface PostRow {
+  id: string;
+  url: string;
+  author: string;
+  text: string;
+  posted_at: string | null;
+}
+
+function rowToPost(row: PostRow): Post {
+  return {
+    id: row.id,
+    url: row.url,
+    author: row.author,
+    text: row.text,
+    ...(row.posted_at != null ? { posted_at: row.posted_at } : {}),
+  };
+}
+
+const upsertPostStmt = db.prepare(`
+  INSERT INTO posts (id, url, author, text, posted_at, ingested_at)
+  VALUES (@id, @url, @author, @text, @posted_at, @ingested_at)
+  ON CONFLICT(id) DO UPDATE SET
+    url = excluded.url, author = excluded.author, text = excluded.text,
+    posted_at = excluded.posted_at
+`);
+
+/** Insert or update a post. ingested_at is set once (preserved on conflict). */
+export function upsertPost(post: Post): void {
+  upsertPostStmt.run({
+    id: post.id,
+    url: post.url,
+    author: post.author,
+    text: post.text,
+    posted_at: post.posted_at ?? null,
+    ingested_at: new Date().toISOString(),
+  });
+}
+
+const getPostByIdStmt = db.prepare(`SELECT id, url, author, text, posted_at FROM posts WHERE id = ?`);
+
+export function getPostById(id: string): Post | undefined {
+  const row = getPostByIdStmt.get(id) as PostRow | undefined;
+  return row ? rowToPost(row) : undefined;
+}
+
+export function getAllPosts(): Post[] {
+  const rows = db.prepare(`SELECT id, url, author, text, posted_at FROM posts`).all() as PostRow[];
+  return rows.map(rowToPost);
+}
+
+/** Resolve post ids to full Post objects from the DB. Throws if any id is missing. */
+export function loadPosts(ids: string[]): Post[] {
+  return ids.map((id) => {
+    const post = getPostById(id);
+    if (!post) throw new Error(`loadPosts: post ${id} not found in posts table`);
+    return post;
+  });
+}
+
+/**
+ * Columns updateDraft accepts — every writable column except the auto-managed timestamps
+ * and the legacy `source_post_id` (write-once at insert; not a Draft field, never updated).
+ */
+type UpdatableColumn = Exclude<WritableColumn, 'created_at' | 'updated_at' | 'source_post_id'>;
 
 const UPDATABLE_COLUMNS: UpdatableColumn[] = [
-  'source_post_id',
+  'source_post_ids',
+  'group_fingerprint',
+  'theme',
   'status',
   'revision_count',
   'reviewer_note',
@@ -226,7 +420,7 @@ const UPDATABLE_COLUMNS: UpdatableColumn[] = [
   'verification',
 ];
 
-/** Truncate all rows — test isolation only. Never call from production code. */
+/** Truncate all DRAFT rows — test isolation only. Posts persist (seed-synced once). */
 export function _resetDbForTesting(): void {
   db.exec('DELETE FROM drafts');
 }

@@ -24,17 +24,25 @@ RUBRIC DIMENSIONS:
 - hook: Does the first 1–2 sentences make a specific sales leader want to keep reading?
   No throat-clearing, no restatement of the title, no "In today's world."
 - originality: Is there a specific point of view? Could this have been written about any
-  other product? Does it have an angle that would surprise someone?
+  other product? Does it have an angle that would surprise someone? State in one phrase the contrarian or non-obvious position the post argues. 
+  If you cannot name a position the reader could disagree with, originality is 3 or below.
 - voice_fit: Does it read like Terret's actual team? Specific and data-dense?
   Short declarative paragraphs? No slop tells (hollow hedges, em-dash abuse, filler tricolons)?
-- value: Does the reader leave with something concrete — a framework, a number, a usable
-  insight? Or is it all abstraction?
 - product_integration: Is Terret the earned, natural resolution — or bolted on? Does the
   product appear where it logically belongs, or is it shoehorned in?
-- structure: Is it skimmable? Does each H2 answer its own question directly in the first
-  sentence? Is there a quick-answer block? Is there a FAQ section?
+- structure: Is the AEO skeleton intact at the edges (quick-answer block up top, 3-item FAQ
+  at the bottom)? Do the middle H2s advance the argument — claims and turns — rather than
+  template questions or category labels? Is there a developed worked scenario and a
+  seriously-argued objection section? A piece with template-question H2s scores 3 or below.
+- value: Does the piece work through its claims — each consequential claim followed by its
+  mechanism — or does it stack assertions? Does the worked scenario actually run (team →
+  wrong conclusion → real cause → what changes), or is it mentioned and dropped? A reader
+  should leave able to re-explain the argument's mechanism to a colleague.
 - truth: Is every Terret claim grounded in the brand config? Are there invented features,
   invented statistics, or invented customer names? Flag each one specifically.
+- FORBIDDEN FIGURES — these are demo-mockup numbers, not published results. Flag any that appear as stated fact, 
+  including reworded or mutated versions (e.g. "3.1x faster" is a mutation of "3.1x the rate"): 
+  3.1x, 45,000 calls, meeting 3 / meeting 7, 2.4x, 78%, $2.4M, $2.1M. Any occurrence as a Terret result = truth score of 1.
 - extractability: Could an AI answer engine lift a clean, correct answer from the
   quick-answer block and from each H2 section as a standalone response?
  

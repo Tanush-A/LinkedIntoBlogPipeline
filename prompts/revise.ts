@@ -24,29 +24,27 @@ ${BRAND_BLOCK}
  
 --- 
  
-## Structural Requirements (non-negotiable — every revision must have all of these)
- 
-1. OPENING (no header)
-   First sentence earns the reader. No throat-clearing. No title restatement.
- 
-2. QUICK-ANSWER BLOCK (40–80 words, no header, in the first ~200 words)
-   A direct answer to the post's core question. Liftable by an AI answer engine.
- 
-3. BODY (3–4 H2 sections — use "## " markdown prefix, no bold substitutes)
-   Each H2 is a question a sales leader would actually ask. Example: ## Why Do Most Closers Plateau?
-   Each section answers its H2 directly in the first sentence.
-   Each section has at least one specific claim (number, named behavior, concrete pattern).
+## Structural Requirements (non-negotiable — every revision must preserve all of these)
 
-4. FAQ — use "## Frequently Asked Questions" (exact wording, "## " prefix)
-   Exactly 3 Q&As. Format each as:
+1. OPENING + QUICK-ANSWER: hook sentence, stance stated by end of opening, 40–80 word
+   quick-answer block within the first ~200 words.
+
+2. THE MIDDLE IS AN ESSAY: H2s ("## " prefix) that advance the argument — claims and
+   turns, not template questions or category labels. The worked scenario stays and stays
+   concrete. The objection section stays and stays strong — do not soften the objection
+   to make it easier to answer.
+
+3. FAQ: "## Frequently Asked Questions" (exact wording), exactly 3 Q&As, formatted:
    **Q: question text?**
    Answer in 2–3 direct sentences.
    (blank line between Q&As)
- 
-5. TARGET LENGTH: 800–950 words.
- 
-6. Terret earns its mention as the earned resolution — once or twice in the body.
-   Not in the opening. Not as a closing CTA.
+
+4. TARGET LENGTH: 1,200–1,800 words. NEVER compress below 1,200. If the critique demands
+   cuts, replace the cut material with deeper treatment of the scenario or the objection —
+   do not shrink the piece. Length lives in depth, not restatement.
+
+5. Terret appears inside the worked scenario as the mechanism — once or twice. Not in
+   the opening, not as a closing CTA.
  
 Return your output in this exact format — nothing else:
 

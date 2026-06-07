@@ -4,22 +4,12 @@
 // Called fire-and-forget from the approval server; must be self-contained.
 
 import 'dotenv/config';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import OpenAI from 'openai';
-import type { Post, CritiqueOutput } from '../types';
-import { getDraft, updateDraft } from '../db';
+import type { CritiqueOutput } from '../types';
+import { getDraft, updateDraft, loadPosts } from '../db';
 import { notify } from './notify';
 import { buildReviseMessages } from '../../prompts/revise';
 import { verifyDraft } from '../lib/verify';
-
-function loadPost(sourcePostId: string): Post {
-  const seedPath = resolve(__dirname, '../../seed/posts.json');
-  const posts = JSON.parse(readFileSync(seedPath, 'utf-8')) as Post[];
-  const post = posts.find((p) => p.id === sourcePostId);
-  if (!post) throw new Error(`regenerate: post ${sourcePostId} not found in seed`);
-  return post;
-}
 
 /**
  * Re-runs Pass 4 (revise) for a draft in needs_edits state.
@@ -61,14 +51,15 @@ export async function regenerate(draftId: string): Promise<void> {
 
   const reviewerNote = draft.reviewer_note;
   const critique: CritiqueOutput = JSON.parse(draft.critique);
-  const post = loadPost(draft.source_post_id);
+  const posts = loadPosts(draft.source_post_ids);
 
   try {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     console.log(`[regenerate] revise  draft=${draftId} revision=${draft.revision_count}`);
     const reviseResp = await client.chat.completions.create({
-      model: 'gpt-4o',
+      model: process.env.OPENAI_MODEL ?? 'gpt-5.5',
+      max_completion_tokens: 4000,
       messages: buildReviseMessages(currentContent, critique, reviewerNote),
     });
 
@@ -76,8 +67,8 @@ export async function regenerate(draftId: string): Promise<void> {
     if (!content) throw new Error('revise pass returned null content');
 
     // Re-verify: reviewer may have introduced or removed slop/ungrounded figures.
-    // Pass source post so figures the original author cited remain grounded.
-    const verification = verifyDraft(content, [post.text]);
+    // Grounding corpus = ALL source posts so figures the authors cited remain grounded.
+    const verification = verifyDraft(content, posts.map((p) => p.text));
     console.log(
       `[regenerate] verify draft=${draftId}` +
       ` passed=${verification.passed}` +
@@ -97,7 +88,7 @@ export async function regenerate(draftId: string): Promise<void> {
 
     // Re-fetch so notify() receives the freshly updated draft
     const fresh = getDraft(draftId)!;
-    await notify(fresh, post);
+    await notify(fresh, posts);
     console.log(`[regenerate] re-notified Slack for draft=${draftId}`);
   } catch (err) {
     const msg = `[Re-gen failed] ${err instanceof Error ? err.message : String(err)}`;

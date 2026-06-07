@@ -336,6 +336,23 @@ set all of these — not just the body text.
 | **Context-finding pass** | Web search between draft + critique; grounds claims; boosts AEO evidence density | Switch to Anthropic API for native web_search |
 | **Scheduling** | Auto-trigger on new posts | Live ingestion first |
 | **Automated eval pass** | 4th API call → rubric scorecard; delta artifact for README | Optional |
+
+### Synthesis (Stage 7) — mapped, not built
+
+- **Judge batch limits.** One judge call must fit the batch + existing-theme summaries in
+  context. Cap `JUDGE_BATCH_MAX` ≈ 30–40 posts per call at LinkedIn-post length; larger batches
+  chunk into sequential judge calls, carrying themes forward as existing-group context.
+- **Production grouping = embedding prefilter → judge confirm.** Cluster candidates by cosine
+  similarity, then the LLM judge confirms/labels only the candidate clusters. Cuts judge tokens
+  ~10x and scales past context limits. (Rejected as the *primary* grouping mechanism — a
+  similarity threshold groups on topic overlap, not on a shared thesis; see DECISIONS.md Stage 7.)
+- **Continuous ingestion evolution.** Streaming posts get a sliding window: each new post is
+  judged against the theme registry (attach / new singleton), with a periodic batch pass
+  consolidating singletons into emergent groups. The fingerprint model already supports this —
+  attachment = changed membership = new fingerprint = roll-up draft.
+- **Spoke→pillar back-links.** Pillar drafts link down to published spokes today; spoke→pillar
+  back-links (and a cluster index page) are a future edit. Every piece stays self-canonical
+  (dev.to default); the cluster signal is the internal links themselves.
  
 ---
  

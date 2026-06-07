@@ -8,6 +8,8 @@ export default defineConfig({
     // between test files (each file gets its own :memory: DB instance).
     pool: 'forks',
     include: ['tests/**/*.test.ts'],
+    // Populate the posts table (seed → DB) once per worker before any test runs.
+    setupFiles: ['tests/setup.ts'],
     // Clear mock call history + pending "once" queues before each test.
     // Does NOT reset persistent implementations set with mockResolvedValue().
     clearMocks: true,

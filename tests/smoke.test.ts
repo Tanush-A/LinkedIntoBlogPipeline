@@ -24,7 +24,7 @@ describe.runIf(process.env.RUN_LIVE === '1')('live smoke (pre-demo only)', () =>
       const draft = insertDraft(makeDraft({ status: 'approved' }));
 
       // Real Slack notify — must not throw
-      await notify(draft, MOCK_POST);
+      await notify(draft, [MOCK_POST]);
 
       // Real dev.to publish in draft mode (DEVTO_DRAFT_MODE=true, set by npm script)
       await publish(draft);

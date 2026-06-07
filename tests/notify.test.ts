@@ -24,7 +24,7 @@ afterEach(() => {
 describe('notify', () => {
   it('POSTs to SLACK_WEBHOOK_URL', async () => {
     const d = insertDraft(makeDraft());
-    await notify(d, MOCK_POST);
+    await notify(d, [MOCK_POST]);
 
     const [url] = mockFetch.mock.calls[0] as [string];
     expect(url).toBe('https://hooks.slack.com/test');
@@ -32,7 +32,7 @@ describe('notify', () => {
 
   it('message contains the review link built from BASE_URL', async () => {
     const d = insertDraft(makeDraft());
-    await notify(d, MOCK_POST);
+    await notify(d, [MOCK_POST]);
 
     const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(options.body as string) as { text: string };
@@ -41,7 +41,7 @@ describe('notify', () => {
 
   it('message contains the source post URL', async () => {
     const d = insertDraft(makeDraft());
-    await notify(d, MOCK_POST);
+    await notify(d, [MOCK_POST]);
 
     const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(options.body as string) as { text: string };
@@ -50,7 +50,7 @@ describe('notify', () => {
 
   it('request uses Content-Type: application/json', async () => {
     const d = insertDraft(makeDraft());
-    await notify(d, MOCK_POST);
+    await notify(d, [MOCK_POST]);
 
     const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
     const headers = options.headers as Record<string, string>;
@@ -60,7 +60,7 @@ describe('notify', () => {
   it('throws on non-ok webhook response', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 403, statusText: 'Forbidden' });
     const d = insertDraft(makeDraft());
-    await expect(notify(d, MOCK_POST)).rejects.toThrow('Slack webhook failed');
+    await expect(notify(d, [MOCK_POST])).rejects.toThrow('Slack webhook failed');
   });
 
   it('throws when SLACK_WEBHOOK_URL is not set', async () => {
@@ -68,7 +68,7 @@ describe('notify', () => {
     delete process.env.SLACK_WEBHOOK_URL;
     const d = insertDraft(makeDraft());
     try {
-      await expect(notify(d, MOCK_POST)).rejects.toThrow('SLACK_WEBHOOK_URL not set');
+      await expect(notify(d, [MOCK_POST])).rejects.toThrow('SLACK_WEBHOOK_URL not set');
     } finally {
       process.env.SLACK_WEBHOOK_URL = original;
     }

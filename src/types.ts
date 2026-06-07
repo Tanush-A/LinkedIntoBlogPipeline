@@ -20,6 +20,25 @@ export interface Post {
 }
 
 // ---------------------------------------------------------------------------
+// Grouping / synthesis contracts
+// ---------------------------------------------------------------------------
+
+/** One partition produced by the grouping judge (or seed/groups.json). */
+export interface GroupPartition {
+  theme: string;
+  post_ids: string[];
+  /** Judge's confidence this is a coherent group, 0–1. Overrides are 1.0. */
+  confidence: number;
+}
+
+/** A published piece, passed to pillar drafts for topic-cluster linking. */
+export interface PublishedRef {
+  title: string;
+  cms_url: string;
+  source_post_ids: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline state — one generated draft
 // ---------------------------------------------------------------------------
 
@@ -34,8 +53,12 @@ export type DraftStatus =
 export interface Draft {
   /** UUID — pipeline run ID. Stamped in every log line for correlation. */
   id: string;
-  /** FK → Post.id */
-  source_post_id: string;
+  /** All source posts synthesized into this draft. n=1 for singletons. */
+  source_post_ids: string[];
+  /** sha256 of sorted source_post_ids — the dedup key. See src/lib/fingerprint.ts */
+  group_fingerprint: string;
+  /** Theme name assigned by the grouping judge (or groups.json override). */
+  theme?: string;
   status: DraftStatus;
   /**
    * Increments on each needs_edits cycle.

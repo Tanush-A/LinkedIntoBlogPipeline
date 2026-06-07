@@ -15,8 +15,16 @@ vi.mock('openai', () => ({
 }));
 
 import { app } from '../src/server/approval';
-import { insertDraft, getDraft, _resetDbForTesting } from '../src/db';
-import { makeDraft, MOCK_CRITIQUE, MOCK_REVISED_DRAFT, DEVTO_MOCK_RESPONSE } from './helpers/fixtures';
+import { insertDraft, getDraft, getPostById, _resetDbForTesting } from '../src/db';
+import { groupFingerprint } from '../src/lib/fingerprint';
+import {
+  makeDraft,
+  MOCK_CRITIQUE,
+  MOCK_REVISED_DRAFT,
+  DEVTO_MOCK_RESPONSE,
+  SEED_POST_ID,
+  SEED_POST_ID_2,
+} from './helpers/fixtures';
 
 let mockFetch: ReturnType<typeof vi.fn>;
 
@@ -259,6 +267,28 @@ describe('state machine', () => {
   it('GET /review/:draftId for missing draft returns 404', async () => {
     const res = await request(app).get(`/review/${randomUUID()}`);
     expect(res.status).toBe(404);
+  });
+
+  it('GET /review for a pillar draft lists ALL source posts and the theme', async () => {
+    const ids = [SEED_POST_ID, SEED_POST_ID_2];
+    const d = insertDraft(
+      makeDraft({
+        source_post_ids: ids,
+        group_fingerprint: groupFingerprint(ids),
+        theme: 'Fragmented data breaks revenue AI',
+      }),
+    );
+    const res = await request(app).get(`/review/${d.id}`);
+    expect(res.status).toBe(200);
+    // Theme is shown…
+    expect(res.text).toContain('Fragmented data breaks revenue AI');
+    // …and every source post is linked by its real URL (path portion; query has
+    // HTML-escaped & in the rendered href).
+    for (const id of ids) {
+      expect(res.text).toContain(getPostById(id)!.url.split('?')[0]);
+    }
+    // Pillar header reflects the synthesis count.
+    expect(res.text).toContain('2 synthesized');
   });
 });
 

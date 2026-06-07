@@ -32,7 +32,7 @@ async function main() {
   for (const post of posts) {
     const label = post.text.slice(0, 45).replace(/\n/g, ' ') + '…';
     console.log(`\n[compare] Running: ${post.id}`);
-    const r = await generate(post);
+    const r = await generate([post]);
     const critique: CritiqueOutput = JSON.parse(r.critique);
     results.push({ postId: post.id, label, critique, revised_draft: r.revised_draft });
   }
@@ -62,7 +62,7 @@ async function main() {
   }
 
   // ── Write eval files ───────────────────────────────────────────────────────
-  const evalDir = path.join(import.meta.dirname, '..', 'docs', 'eval');
+  const evalDir = path.join(__dirname, '..', 'docs', 'eval');
   fs.mkdirSync(evalDir, { recursive: true });
 
   for (const { postId, critique, revised_draft } of results) {

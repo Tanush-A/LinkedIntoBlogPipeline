@@ -5,9 +5,12 @@
 
 import 'dotenv/config';
 import express from 'express';
-import { getDraft, updateDraft } from '../db';
+import type { Post } from '../types';
+import { getDraft, updateDraft, getPostById } from '../db';
 import { publish } from '../pipeline/publish';
 import { regenerate } from '../pipeline/regenerate';
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const app = express();
 // HTML forms POST as application/x-www-form-urlencoded — must parse that, not JSON
@@ -59,6 +62,24 @@ app.get('/review/:draftId', (req, res) => {
 
   const id = draft.id;
 
+  // Source posts: a pillar draft synthesizes several. Resolve each from the posts table;
+  // degrade gracefully to the bare id if a post isn't found (e.g. live-ingested, not in seed).
+  const n = draft.source_post_ids.length;
+  const isPillar = n > 1;
+  let sourceItems = '';
+  try {
+    sourceItems = draft.source_post_ids
+      .map((pid) => {
+        const p: Post | undefined = getPostById(pid);
+        if (!p) return `<li><span style="color:#6b7280">${esc(pid)}</span> (not in posts table)</li>`;
+        const label = esc(p.text.split('\n').find((l) => l.trim())?.slice(0, 90) ?? pid);
+        return `<li><a href="${esc(p.url)}" target="_blank">${label}</a></li>`;
+      })
+      .join('');
+  } catch {
+    sourceItems = draft.source_post_ids.map((pid) => `<li>${esc(pid)}</li>`).join('');
+  }
+
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -109,6 +130,12 @@ app.get('/review/:draftId', (req, res) => {
       border-radius: 6px; padding: 12px 16px; font-size: 13px; margin-top: 12px;
     }
     .no-actions { color: #6b7280; font-size: 14px; margin-top: 16px; }
+    .sources { margin: 6px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.7; }
+    .sources a { color: #2563eb; }
+    .theme {
+      display: inline-block; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
+      border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: 600; margin: 4px 0 0;
+    }
   </style>
 </head>
 <body>
@@ -120,6 +147,10 @@ app.get('/review/:draftId', (req, res) => {
   <p class="meta">Revision: ${draft.revision_count}</p>
   <p class="meta">Created: ${draft.created_at}</p>
   <p class="meta">Updated: ${draft.updated_at}</p>
+
+  <h2>${isPillar ? `Source Posts — ${n} synthesized into one pillar` : 'Source Post'}</h2>
+  ${draft.theme ? `<p class="theme">Theme: ${esc(draft.theme)}</p>` : ''}
+  <ul class="sources">${sourceItems}</ul>
 
   <h2>Draft Content</h2>
   <div class="content">${escapedContent}</div>

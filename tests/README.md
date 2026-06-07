@@ -14,7 +14,7 @@ All tests run against the **real code paths** — `db.ts`, the approval handlers
 
 | Edge | How |
 |---|---|
-| OpenAI (`gpt-4o`) | `vi.mock('openai')` — intercepts `new OpenAI()` and `chat.completions.create` |
+| OpenAI (model via `OPENAI_MODEL` env) | `vi.mock('openai')` — intercepts `new OpenAI()` and `chat.completions.create` |
 | dev.to HTTP | `vi.stubGlobal('fetch', mockFetch)` — captures POST/PUT |
 | Slack webhook | Same global fetch stub |
 
@@ -25,11 +25,13 @@ All tests run against the **real code paths** — `db.ts`, the approval handlers
 | File | What it covers |
 |---|---|
 | `gate.test.ts` | HTTP handler state machine: approve, reject, request-edits, failure, retry, edge cases |
-| `dedup.test.ts` | `ingestPosts()` dedup by `source_post_id` |
+| `dedup.test.ts` | `ingestPartitions()` dedup by `group_fingerprint` (judge fails open → 1:1) |
+| `synthesis.test.ts` | Batch many:1: grouping judge (mocked) validation, fingerprint dedup/roll-up, N-post extract, verify corpus, posts table |
 | `generation.test.ts` | 4-pass GPT chain with mocked LLM — orchestration and row shape |
 | `notify.test.ts` | Slack webhook — message shape and review URL construction |
 | `publish.test.ts` | dev.to field mapping, auth header, idempotency guard, DEVTO_DRAFT_MODE |
 | `smoke.test.ts` | Real API smoke (gated by `RUN_LIVE=1`) |
+| `setup.ts` | Seed-syncs the posts table once per worker (loadPosts reads the DB) |
 | `helpers/fixtures.ts` | Shared `makeDraft()`, mock posts, mock LLM responses |
 
 ## Adding a test when a feature lands

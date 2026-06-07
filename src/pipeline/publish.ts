@@ -12,6 +12,7 @@
 
 import type { Draft } from '../types';
 import { updateDraft } from '../db';
+import { splitTitleAndBody } from '../lib/text';
 
 const DEVTO_API = 'https://dev.to/api/articles';
 
@@ -88,33 +89,6 @@ export async function publish(draft: Draft): Promise<void> {
       console.warn(`[publish] canonical_url PUT failed for draft=${draft.id}: ${String(err)}`);
     }
   }
-}
-
-/**
- * The revise pass emits "TITLE: <title>\n\n<body>" as its output contract.
- * Extract both; fall back to legacy first-line scan if TITLE: line is absent.
- */
-function splitTitleAndBody(revised_draft: string): { title: string; body: string } {
-  const lines = revised_draft.split('\n');
-  const firstLine = lines[0]?.trim() ?? '';
-  if (firstLine.startsWith('TITLE:')) {
-    const title = firstLine.replace(/^TITLE:\s*/, '').trim().slice(0, 60);
-    // Skip the TITLE line and any immediately following blank lines
-    const rest = lines.slice(1);
-    const bodyStart = rest.findIndex(l => l.trim() !== '');
-    const body = rest.slice(bodyStart >= 0 ? bodyStart : 0).join('\n').trim();
-    return { title, body };
-  }
-  // Fallback for drafts written before Stage 4 revise contract
-  return { title: deriveTitle(revised_draft), body: revised_draft };
-}
-
-function deriveTitle(draft_text: string): string {
-  const firstLine = draft_text
-    .split('\n')
-    .map(l => l.replace(/^#+\s*/, '').trim())
-    .find(l => l.length > 0);
-  return (firstLine ?? `Draft`).slice(0, 60);
 }
 
 /**

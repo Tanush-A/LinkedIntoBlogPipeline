@@ -1,16 +1,22 @@
 // src/pipeline/notify.ts
 // Posts a Slack incoming webhook notification when a draft is ready for review.
+// A draft may synthesize multiple source posts — the title/source lines note the extra
+// sources, and the judge's theme is included when set. n=1 reads exactly as before.
 
 import type { Draft, Post } from '../types';
 
-export async function notify(draft: Draft, post: Post): Promise<void> {
+export async function notify(draft: Draft, posts: Post[]): Promise<void> {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl) throw new Error('SLACK_WEBHOOK_URL not set');
 
   const baseUrl = (process.env.BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
   const reviewUrl = `${baseUrl}/review/${draft.id}`;
 
-  const postTitle = post.text.split('\n')[0].slice(0, 80);
+  const extra = posts.length - 1;
+  const suffix = extra > 0 ? ` (+${extra} more source${extra > 1 ? 's' : ''})` : '';
+  const postTitle = (posts[0]?.text.split('\n')[0] ?? '').slice(0, 80) + suffix;
+  const sourceLine = (posts[0]?.url ?? '') + suffix;
+
   const preview = (draft.revised_draft ?? '')
     .replace(/^#+\s*/m, '')
     .split('\n')
@@ -20,8 +26,9 @@ export async function notify(draft: Draft, post: Post): Promise<void> {
     text: [
       `*New draft ready for review*`,
       ``,
+      ...(draft.theme ? [`*Theme:* ${draft.theme}`] : []),
       `*Post:* ${postTitle}`,
-      `*Source:* ${post.url}`,
+      `*Source:* ${sourceLine}`,
       `*Preview:* ${preview.slice(0, 120)}`,
       ``,
       `*Review:* ${reviewUrl}`,

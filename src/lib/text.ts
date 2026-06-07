@@ -35,3 +35,20 @@ export function firstLine(text: string, max = 60): string {
   const line = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
   return line.slice(0, max);
 }
+
+/** Max length of a published meta description (dev.to / SEO convention). */
+export const META_MAX = 155;
+
+/**
+ * The meta-description CANDIDATE (untruncated): the first substantive paragraph of the body,
+ * markdown stripped. Single source of truth shared by publish.ts (which truncates to META_MAX)
+ * and the review scorecard (which reports the natural length + flags truncation). The body is
+ * the post WITHOUT the TITLE: line.
+ */
+export function deriveMetaDescription(body: string): string {
+  const candidate = body
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '').trim())
+    .find((p) => p.length >= 40 && !p.startsWith('#') && !p.startsWith('---'));
+  return candidate ?? body;
+}

@@ -12,7 +12,7 @@
 
 import type { Draft } from '../types';
 import { updateDraft } from '../db';
-import { splitTitleAndBody } from '../lib/text';
+import { splitTitleAndBody, deriveMetaDescription, META_MAX } from '../lib/text';
 
 const DEVTO_API = 'https://dev.to/api/articles';
 
@@ -92,14 +92,10 @@ export async function publish(draft: Draft): Promise<void> {
 }
 
 /**
- * Extract first substantive paragraph from the post body as the meta description.
- * The quick-answer block (40–80 words, first ~200 words) is the target — it's designed
- * to be a direct extractable answer. Strip markdown formatting before truncating.
+ * Meta description for the published article: the first substantive paragraph, truncated to
+ * META_MAX. Delegates to the shared `deriveMetaDescription` (lib/text.ts) so the review-page
+ * scorecard and the actual publish use the exact same source text.
  */
 function deriveDescription(body: string): string {
-  const candidate = body
-    .split(/\n{2,}/)
-    .map(p => p.replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '').trim())
-    .find(p => p.length >= 40 && !p.startsWith('#') && !p.startsWith('---'));
-  return (candidate ?? body).slice(0, 155);
+  return deriveMetaDescription(body).slice(0, META_MAX);
 }

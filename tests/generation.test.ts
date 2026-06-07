@@ -264,12 +264,4 @@ describe('re-score loop', () => {
   });
 });
 
-// ─── todo stubs ───────────────────────────────────────────────────────────────
-
-describe('upcoming: scorecard', () => {
-  it.todo('quick-answer block present → scorecard passes');
-  it.todo('quick-answer block absent → scorecard fails');
-  it.todo('question-H2 count checked');
-  it.todo('FAQ section present/absent');
-  it.todo('meta description length within bounds');
-});
+// The 'upcoming: scorecard' todos are now implemented in tests/scorecard.test.ts.

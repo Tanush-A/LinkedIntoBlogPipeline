@@ -5,13 +5,15 @@
 
 import 'dotenv/config';
 import express from 'express';
-import type { Post } from '../types';
+import type { Post, CritiqueOutput } from '../types';
 import { getDraft, updateDraft, getPostById, getMeta } from '../db';
 import { publish } from '../pipeline/publish';
 import { regenerate } from '../pipeline/regenerate';
 import { LAST_POLL_KEY } from '../pipeline/cycle';
+import { renderMarkdown, escapeHtml } from '../lib/markdown';
+import { buildScorecard } from '../lib/scorecard';
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const esc = escapeHtml;
 
 const app = express();
 // HTML forms POST as application/x-www-form-urlencoded — must parse that, not JSON
@@ -69,11 +71,6 @@ app.get('/review/:draftId', (req, res) => {
   const maxRevisions = parseInt(process.env.MAX_REVISIONS ?? '3', 10);
   const atCap = draft.revision_count >= maxRevisions;
 
-  const escapedContent = content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
   const id = draft.id;
 
   // Source posts: a pillar draft synthesizes several. Resolve each from the posts table;
@@ -85,14 +82,47 @@ app.get('/review/:draftId', (req, res) => {
     sourceItems = draft.source_post_ids
       .map((pid) => {
         const p: Post | undefined = getPostById(pid);
-        if (!p) return `<li><span style="color:#6b7280">${esc(pid)}</span> (not in posts table)</li>`;
-        const label = esc(p.text.split('\n').find((l) => l.trim())?.slice(0, 90) ?? pid);
-        return `<li><a href="${esc(p.url)}" target="_blank">${label}</a></li>`;
+        if (!p) return `<li><span class="muted">${esc(pid)}</span> (not in posts table)</li>`;
+        const label = esc(p.text.split('\n').find((l) => l.trim())?.slice(0, 110) ?? pid);
+        return `<li><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${label}</a></li>`;
       })
       .join('');
   } catch {
     sourceItems = draft.source_post_ids.map((pid) => `<li>${esc(pid)}</li>`).join('');
   }
+
+  // Rendered article (markdown → HTML; renderer escapes internally).
+  const articleHtml = renderMarkdown(content);
+
+  // Deterministic AEO scorecard (read-only). critique is a JSON string on the row.
+  let critiqueObj: CritiqueOutput | undefined;
+  try {
+    critiqueObj = draft.critique ? (JSON.parse(draft.critique) as CritiqueOutput) : undefined;
+  } catch {
+    critiqueObj = undefined;
+  }
+  const scorecard = buildScorecard(content, proposedTitle, critiqueObj);
+  const scoreWarnings = scorecard.filter((c) => c.status === 'warn').length;
+  const scorecardRows = scorecard
+    .map(
+      (c) => `<tr>
+        <td class="sc-icon ${c.status}">${c.status === 'pass' ? '✓' : '!'}</td>
+        <td class="sc-label">${esc(c.label)}</td>
+        <td class="sc-detail">${esc(c.detail)}</td>
+      </tr>`,
+    )
+    .join('');
+
+  const v = draft.verification;
+  const verificationHtml = v
+    ? v.passed
+      ? `<div class="panel-body ok"><strong>Passed</strong> — no slop terms or ungrounded figures detected.</div>`
+      : `<div class="panel-body warn">
+           <strong>Issues found — review before approving.</strong>
+           ${v.bannedTerms.length > 0 ? `<p class="chips"><span class="chip-label">Banned terms:</span> ${v.bannedTerms.map((t) => `<code>${esc(t)}</code>`).join(' ')}</p>` : ''}
+           ${v.ungroundedNumbers.length > 0 ? `<p class="chips"><span class="chip-label">Ungrounded figures:</span> ${v.ungroundedNumbers.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}
+         </div>`
+    : `<div class="panel-body muted">Not verified (draft predates the verification layer).</div>`;
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
@@ -100,128 +130,163 @@ app.get('/review/:draftId', (req, res) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Review Draft — ${id.slice(0, 8)}</title>
+  <title>Review — ${proposedTitle ? esc(proposedTitle.slice(0, 50)) : id.slice(0, 8)}</title>
   <style>
+    :root {
+      --ink:#1a1a1a; --muted:#6b7280; --line:#e5e7eb; --bg:#ffffff; --soft:#f9fafb;
+      --blue:#2563eb; --green:#059669; --amber:#b45309; --red:#dc2626;
+    }
     *, *::before, *::after { box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      max-width: 860px; margin: 48px auto; padding: 0 24px; color: #111;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; color: var(--ink);
+      background: var(--bg); line-height: 1.5;
     }
-    h1 { font-size: 22px; margin: 0 0 8px; }
+    a { color: var(--blue); }
+    .muted { color: var(--muted); }
+    /* Header */
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
     .badge {
-      display: inline-block; padding: 4px 14px; border-radius: 20px;
+      display: inline-block; padding: 4px 14px; border-radius: 999px;
       font-size: 12px; font-weight: 700; letter-spacing: .05em;
-      background: ${color.bg}; color: ${color.fg}; margin-bottom: 16px;
+      background: ${color.bg}; color: ${color.fg};
     }
-    .meta { font-size: 13px; color: #6b7280; margin: 3px 0; }
-    h2 { font-size: 16px; margin: 28px 0 8px; }
-    .content {
-      background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
-      padding: 24px; white-space: pre-wrap; line-height: 1.7;
-      font-size: 15px; font-family: Georgia, serif;
-      max-height: 520px; overflow-y: auto;
+    h1.title { font-size: 28px; line-height: 1.25; margin: 10px 0 6px; font-weight: 700; letter-spacing: -.01em; }
+    h1.title.untitled { color: var(--muted); font-weight: 600; }
+    .submeta { font-size: 13px; color: var(--muted); margin: 0; }
+    .submeta code { font-size: 12px; }
+    .rev-pill {
+      display:inline-block; font-size:12px; font-weight:600; padding:2px 9px; border-radius:999px;
+      background:#f3f4f6; color:#374151; margin-left:4px;
     }
-    .actions { margin-top: 28px; display: flex; flex-direction: column; gap: 14px; }
-    .action-row { display: flex; align-items: flex-start; gap: 0; }
+    .rev-pill.cap { background:#fef3c7; color:#92400e; }
+    /* Section + panels */
+    section { margin-top: 30px; }
+    h2.section { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+      font-weight: 700; margin: 0 0 10px; }
+    .panel { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    .panel-body { padding: 14px 16px; font-size: 14px; }
+    .panel-body.ok { background: #ecfdf5; color: #065f46; }
+    .panel-body.warn { background: #fff7ed; color: #9a3412; }
+    .panel-body.muted { background: var(--soft); }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 680px) { .grid2 { grid-template-columns: 1fr; } }
+    /* Theme + sources */
+    .theme { display: inline-block; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
+      border-radius: 8px; padding: 5px 12px; font-size: 13px; font-weight: 600; }
+    ul.sources { margin: 10px 0 0; padding-left: 20px; font-size: 14px; }
+    ul.sources li { margin: 4px 0; }
+    /* Scorecard */
+    table.scorecard { width: 100%; border-collapse: collapse; font-size: 14px; }
+    table.scorecard td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    table.scorecard tr:last-child td { border-bottom: none; }
+    .sc-icon { width: 26px; text-align: center; font-weight: 800; border-radius: 6px; }
+    .sc-icon.pass { color: var(--green); }
+    .sc-icon.warn { color: var(--amber); }
+    .sc-label { font-weight: 600; }
+    .sc-detail { color: var(--muted); text-align: right; }
+    .chips { margin: 8px 0 0; }
+    .chip-label { font-weight: 600; }
+    .panel-body code, .chips code {
+      background: rgba(0,0,0,.06); padding: 1px 6px; border-radius: 4px; font-size: 12.5px;
+    }
+    /* Article */
+    article {
+      font-family: Georgia, "Times New Roman", serif; font-size: 17px; line-height: 1.72; color: #222;
+    }
+    article h1 { font-size: 24px; line-height: 1.3; margin: 28px 0 10px; }
+    article h2 { font-size: 20px; line-height: 1.3; margin: 30px 0 8px; }
+    article h3 { font-size: 17px; margin: 22px 0 6px; }
+    article p { margin: 0 0 16px; }
+    article ul { margin: 0 0 16px; padding-left: 24px; }
+    article li { margin: 4px 0; }
+    article a { color: var(--blue); }
+    article hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }
+    article code { background: rgba(0,0,0,.06); padding: 1px 6px; border-radius: 4px; font-size: 15px; }
+    /* Actions */
+    .actions { margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--line); }
+    .action-buttons { display: flex; gap: 12px; flex-wrap: wrap; }
     form { margin: 0; }
-    button {
-      padding: 10px 22px; font-size: 15px; border-radius: 6px;
-      cursor: pointer; font-weight: 600; border: none; line-height: 1.4;
-    }
-    .btn-approve { background: #10b981; color: #fff; }
-    .btn-reject  { background: #ef4444; color: #fff; }
-    .btn-edits   { background: #f59e0b; color: #fff; margin-top: 6px; }
-    textarea {
-      display: block; width: 100%; padding: 10px;
-      border: 1px solid #d1d5db; border-radius: 6px;
-      font-size: 14px; margin: 6px 0 8px; resize: vertical;
-    }
-    label { font-size: 14px; font-weight: 600; display: block; margin-bottom: 4px; }
-    .cms-link { margin-top: 20px; font-size: 15px; }
-    .cms-link a { color: #2563eb; }
-    .note-block {
-      background: #fffbeb; border: 1px solid #fcd34d;
-      border-radius: 6px; padding: 12px 16px; font-size: 13px; margin-top: 12px;
-    }
-    .no-actions { color: #6b7280; font-size: 14px; margin-top: 16px; }
-    .sources { margin: 6px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.7; }
-    .sources a { color: #2563eb; }
-    .theme {
-      display: inline-block; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
-      border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: 600; margin: 4px 0 0;
-    }
+    button { padding: 11px 22px; font-size: 15px; border-radius: 8px; cursor: pointer;
+      font-weight: 600; border: none; line-height: 1.4; }
+    .btn-approve { background: var(--green); color: #fff; }
+    .btn-reject { background: #fff; color: var(--red); border: 1px solid #fca5a5; }
+    .btn-edits { background: var(--amber); color: #fff; }
+    .edits { margin-top: 18px; max-width: 560px; }
+    textarea { display: block; width: 100%; padding: 11px; border: 1px solid #d1d5db; border-radius: 8px;
+      font-size: 14px; font-family: inherit; margin: 6px 0 10px; resize: vertical; }
+    label { font-size: 14px; font-weight: 600; display: block; }
+    .cap-note { color: #92400e; background: #fef3c7; padding: 12px 16px; border-radius: 8px;
+      border: 1px solid #fcd34d; font-size: 14px; margin-top: 16px; }
+    .no-actions { color: var(--muted); font-size: 14px; }
+    .cms-link { margin-top: 18px; font-size: 15px; }
+    .note-block { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px;
+      padding: 12px 16px; font-size: 14px; margin-top: 14px; }
   </style>
 </head>
 <body>
-  <h1>Content Review</h1>
-  <span class="badge">${draft.status.toUpperCase()}</span>
+  <div class="topbar">
+    <span class="eyebrow">Content Review</span>
+    <span class="badge">${draft.status.toUpperCase()}</span>
+  </div>
 
-  <p class="meta">Draft ID: <code>${id}</code></p>
-  ${proposedTitle ? `<p class="meta">Proposed title: <strong>${proposedTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</strong> <span style="color:#9ca3af;font-weight:400">(${proposedTitle.length} chars)</span></p>` : ''}
-  <p class="meta">Revision: ${draft.revision_count}</p>
-  <p class="meta">Created: ${draft.created_at}</p>
-  <p class="meta">Updated: ${draft.updated_at}</p>
-
-  <h2>${isPillar ? `Source Posts — ${n} synthesized into one pillar` : 'Source Post'}</h2>
-  ${draft.theme ? `<p class="theme">Theme: ${esc(draft.theme)}</p>` : ''}
-  <ul class="sources">${sourceItems}</ul>
-
-  <h2>Draft Content</h2>
-  <div class="content">${escapedContent}</div>
+  <h1 class="title${proposedTitle ? '' : ' untitled'}">${proposedTitle ? esc(proposedTitle) : 'Untitled draft'}</h1>
+  <p class="submeta">
+    ${proposedTitle ? `${proposedTitle.length} chars &middot; ` : ''}Draft <code>${id}</code>
+    <span class="rev-pill${atCap ? ' cap' : ''}">rev ${draft.revision_count}/${maxRevisions}</span>
+  </p>
+  <p class="submeta">Updated ${esc(draft.updated_at)}</p>
 
   ${draft.cms_url
-    ? `<p class="cms-link">Published: <a href="${draft.cms_url}" target="_blank">${draft.cms_url}</a></p>`
+    ? `<p class="cms-link">Published: <a href="${esc(draft.cms_url)}" target="_blank" rel="noopener noreferrer">${esc(draft.cms_url)}</a></p>`
     : ''}
+
+  <section>
+    <h2 class="section">${isPillar ? `Source posts — ${n} synthesized into one pillar` : 'Source post'}</h2>
+    ${draft.theme ? `<span class="theme">Theme: ${esc(draft.theme)}</span>` : ''}
+    <ul class="sources">${sourceItems}</ul>
+  </section>
+
+  <section class="grid2">
+    <div>
+      <h2 class="section">AEO scorecard ${scoreWarnings > 0 ? `<span class="muted">(${scoreWarnings} to review)</span>` : '<span class="muted">(all clear)</span>'}</h2>
+      <div class="panel"><table class="scorecard">${scorecardRows}</table></div>
+    </div>
+    <div>
+      <h2 class="section">Verification</h2>
+      <div class="panel">${verificationHtml}</div>
+    </div>
+  </section>
 
   ${draft.reviewer_note
-    ? `<div class="note-block"><strong>Reviewer note:</strong> ${draft.reviewer_note.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>`
+    ? `<div class="note-block"><strong>Reviewer note:</strong> ${esc(draft.reviewer_note)}</div>`
     : ''}
 
-  <h2>Verification</h2>
-  ${draft.verification
-    ? draft.verification.passed
-      ? `<div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:6px;padding:12px 16px;font-size:13px;color:#065f46;">
-           <strong>Passed</strong> — no slop terms or ungrounded figures detected.
-         </div>`
-      : `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:12px 16px;font-size:13px;color:#9a3412;">
-           <strong>Issues found — review before approving.</strong>
-           ${draft.verification.bannedTerms.length > 0
-             ? `<p style="margin:8px 0 0"><strong>Banned terms:</strong> ${draft.verification.bannedTerms.map(t => `<code style="background:#fef3c7;padding:1px 5px;border-radius:3px">${t.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code>`).join(', ')}</p>`
-             : ''}
-           ${draft.verification.ungroundedNumbers.length > 0
-             ? `<p style="margin:8px 0 0"><strong>Ungrounded figures:</strong> ${draft.verification.ungroundedNumbers.map(n => `<code style="background:#fef3c7;padding:1px 5px;border-radius:3px">${n.replace(/&/g, '&amp;')}</code>`).join(', ')}</p>`
-             : ''}
-         </div>`
-    : `<p style="color:#9ca3af;font-size:13px">Not verified (draft predates the verification layer).</p>`
-  }
+  <section>
+    <h2 class="section">Draft</h2>
+    <article>${articleHtml}</article>
+  </section>
 
   <div class="actions">
-    ${canAct ? `
-    <form method="POST" action="/action/${id}">
-      <button type="submit" name="action" value="approve" class="btn-approve">
-        Approve &amp; Publish
-      </button>
-    </form>
-
-    <form method="POST" action="/action/${id}">
-      <button type="submit" name="action" value="reject" class="btn-reject">
-        Reject
-      </button>
-    </form>
-
-    ${atCap
-      ? `<p class="no-actions" style="color:#92400e;background:#fef3c7;padding:12px 16px;border-radius:6px;border:1px solid #fcd34d;">
-           Revision cap reached (${maxRevisions}/${maxRevisions}). Approve or Reject this draft — no more re-gens available.
-         </p>`
-      : `<form method="POST" action="/action/${id}">
-           <label for="note-${id}">Request edits <span style="font-weight:400;color:#6b7280">(revision ${draft.revision_count}/${maxRevisions})</span></label>
-           <textarea id="note-${id}" name="note" rows="3" placeholder="Describe the changes needed…" required></textarea>
-           <button type="submit" name="action" value="needs_edits" class="btn-edits">
-             Request Edits
-           </button>
-         </form>`
-    }
-    ` : `<p class="no-actions">No actions available — status is <strong>${draft.status}</strong>.</p>`}
+    ${canAct
+      ? `<div class="action-buttons">
+           <form method="POST" action="/action/${id}">
+             <button type="submit" name="action" value="approve" class="btn-approve">Approve &amp; Publish</button>
+           </form>
+           <form method="POST" action="/action/${id}">
+             <button type="submit" name="action" value="reject" class="btn-reject">Reject</button>
+           </form>
+         </div>
+         ${atCap
+           ? `<p class="cap-note"><strong>Revision cap reached (${maxRevisions}/${maxRevisions}).</strong> Approve or Reject this draft — no more re-gens available.</p>`
+           : `<form method="POST" action="/action/${id}" class="edits">
+                <label for="note-${id}">Request edits <span class="muted" style="font-weight:400">(revision ${draft.revision_count}/${maxRevisions})</span></label>
+                <textarea id="note-${id}" name="note" rows="3" placeholder="Describe the changes needed…" required></textarea>
+                <button type="submit" name="action" value="needs_edits" class="btn-edits">Request Edits</button>
+              </form>`
+         }`
+      : `<p class="no-actions">No actions available — status is <strong>${draft.status}</strong>.</p>`}
   </div>
 </body>
 </html>`);

@@ -83,9 +83,15 @@ export async function ingestPartitions(): Promise<IngestResult> {
     const results = await fetchLivePosts({ knownIds: known, forcedIds, minChars, maxPosts, backfill });
     found = results.length;
 
-    for (const { post, reason } of results) {
+    for (const { post, reason, deferred } of results) {
       if (known.has(post.id)) continue; // already drafted or discarded — skip
       newCount++;
+      if (deferred) {
+        // Text not yet recovered (rate-limited/error/cap). Do NOT persist and do NOT
+        // classify as too-short — leave it unknown so it is re-fetched next cycle.
+        console.log(`[ingest] defer post=${post.id} — text not yet recovered, retrying next cycle`);
+        continue;
+      }
       if (reason) {
         discardPost(post, reason);
         cycleSkips.push({ post_id: post.id, reason });

@@ -41,9 +41,37 @@ function apiKey(): string {
   return k;
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** API error carrying the HTTP status so callers can special-case 429 (rate limit). */
+export class LinkdApiError extends Error {
+  status: number;
+  /** Suggested backoff from the 429 Retry-After header / body, in ms (if present). */
+  retryAfterMs?: number;
+  constructor(message: string, status: number, retryAfterMs?: number) {
+    super(message);
+    this.name = 'LinkdApiError';
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** Read the rate-limit backoff from a 429's Retry-After header or envelope body, in ms. */
+function parseRetryAfterMs(res: Response, json: Envelope<unknown>): number | undefined {
+  const header = res.headers?.get?.('retry-after');
+  if (header) {
+    const secs = Number(header);
+    if (!Number.isNaN(secs)) return secs * 1000;
+  }
+  const body = json as { retryAfter?: unknown; errors?: { retryAfter?: unknown } };
+  const ra = typeof body.retryAfter === 'number' ? body.retryAfter : body.errors?.retryAfter;
+  if (typeof ra === 'number') return ra * 1000;
+  return undefined;
+}
+
 /**
- * Low-level GET. Throws on transport failure, non-2xx, OR a `success !== true` envelope
- * (quota exhaustion can return HTTP 200 with success:false — that must fail the cycle).
+ * Low-level GET. Throws LinkdApiError on transport failure, non-2xx, OR a `success !== true`
+ * envelope (quota exhaustion can return HTTP 200 with success:false — that must fail the cycle).
  */
 async function linkdGet<T>(path: string, params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
@@ -54,11 +82,13 @@ async function linkdGet<T>(path: string, params: Record<string, string>): Promis
   try {
     json = (await res.json()) as Envelope<T>;
   } catch {
-    throw new Error(`LinkdAPI ${path}: non-JSON response (HTTP ${res.status})`);
+    throw new LinkdApiError(`LinkdAPI ${path}: non-JSON response (HTTP ${res.status})`, res.status);
   }
   if (!res.ok || json.success !== true || json.data == null) {
-    throw new Error(
+    throw new LinkdApiError(
       `LinkdAPI ${path} failed: http=${res.status} success=${String(json.success)} errors=${JSON.stringify(json.errors)}`,
+      res.status,
+      parseRetryAfterMs(res, json),
     );
   }
   return json.data;
@@ -129,6 +159,12 @@ export interface LivePostResult {
   post: Post;
   /** prefilter skip reason, or null if the post passes deterministic triage */
   reason: string | null;
+  /**
+   * true when the post is thin AND its full text could NOT be recovered this cycle
+   * (rate-limited / error / backfill cap). It must NOT be classified as "too-short" —
+   * the caller leaves it unpersisted to retry next cycle.
+   */
+  deferred: boolean;
 }
 
 export interface FetchLiveOptions {
@@ -153,30 +189,79 @@ export async function fetchLivePosts(opts: FetchLiveOptions): Promise<LivePostRe
   let listing = await fetchPostListing(urn);
   if (opts.maxPosts > 0) listing = listing.slice(0, opts.maxPosts);
 
+  // Rate-limit guards for /posts/info (Testing tier ≈ 7 req/min):
+  //   - THROTTLE_MS spaces calls (~9s = under 7/min);
+  //   - BACKFILL_MAX caps calls per cycle;
+  //   - a single 429 retry (honoring Retry-After) before giving up.
+  const THROTTLE_MS = parseInt(process.env.BACKFILL_THROTTLE_MS ?? '9000', 10);
+  const BACKFILL_MAX = parseInt(process.env.BACKFILL_MAX ?? '5', 10);
+  let backfillsUsed = 0;
+  let lastBackfillAt = 0;
+
+  async function throttle(): Promise<void> {
+    if (THROTTLE_MS <= 0) return;
+    const wait = lastBackfillAt + THROTTLE_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastBackfillAt = Date.now();
+  }
+
+  // Returns the recovered text, or null if it could not be fetched this cycle.
+  async function recoverText(raw: RawLinkdPost): Promise<string | null> {
+    await throttle();
+    try {
+      return await fetchPostText(activityIdOf(raw));
+    } catch (err) {
+      if (err instanceof LinkdApiError && err.status === 429) {
+        const backoff = err.retryAfterMs ?? THROTTLE_MS;
+        console.warn(`[linkdapi] 429 on backfill — retrying once in ${backoff}ms`);
+        if (backoff > 0) await sleep(backoff);
+        try {
+          return await fetchPostText(activityIdOf(raw));
+        } catch (err2) {
+          console.warn(`[linkdapi] backfill retry failed: ${err2 instanceof Error ? err2.message : err2}`);
+          return null;
+        }
+      }
+      console.warn(`[linkdapi] backfill failed: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
+  }
+
   const out: LivePostResult[] = [];
   for (const raw of listing) {
     const id = postIdFromUrl(raw.url);
     let text = raw.text ?? '';
     const isNew = !opts.knownIds.has(id);
+    let deferred = false;
 
-    // Backfill only NEW, non-reshare posts whose listing text is thin — bounds credit use.
-    if (
-      opts.backfill &&
-      isNew &&
-      raw.resharedPostContent == null &&
-      text.trim().length < opts.minChars
-    ) {
-      try {
-        const full = await fetchPostText(activityIdOf(raw));
-        if (full.trim().length > text.trim().length) text = full;
-      } catch (err) {
-        console.warn(`[linkdapi] text backfill failed for ${id}: ${err instanceof Error ? err.message : err}`);
+    const needsBackfill =
+      opts.backfill && isNew && raw.resharedPostContent == null && text.trim().length < opts.minChars;
+
+    if (needsBackfill) {
+      if (backfillsUsed >= BACKFILL_MAX) {
+        // Per-cycle cap hit — not even attempted. Defer (NOT "too-short"); retry next cycle.
+        deferred = true;
+        console.log(`[linkdapi] defer ${id}: backfill cap (${BACKFILL_MAX}) reached this cycle`);
+      } else {
+        backfillsUsed++;
+        const recovered = await recoverText(raw);
+        if (recovered === null) {
+          // Could NOT recover the text (rate-limited/error) — defer, do not misclassify.
+          deferred = true;
+          console.log(`[linkdapi] defer ${id}: text not recovered (rate-limited/error), retry next cycle`);
+        } else if (recovered.trim().length > text.trim().length) {
+          text = recovered;
+        }
       }
     }
 
     const post = mapRawPost(raw, text);
+    if (deferred) {
+      out.push({ post, reason: null, deferred: true });
+      continue;
+    }
     const reason = opts.forcedIds.has(id) ? null : prefilterReason(raw, post.text, opts.minChars);
-    out.push({ post, reason });
+    out.push({ post, reason, deferred: false });
   }
   return out;
 }

@@ -63,6 +63,17 @@ downstream change. The contract is the seam.
   posts (steady-state polling backfills ~0–2/cycle); `MAX_POSTS_PER_CYCLE` caps the cold-start
   burst. Known limitation documented; `groups.json` is the manual recovery for anything still missed.
 
+- **Backfill rate limiting: defer, never misclassify.** The Testing tier caps `/posts/info` at
+  ~7 req/min; an unthrottled backfill loop trips a 429, loses the text, and the post would then
+  be wrongly discarded as "too-short" — conflating "genuinely short" with "not yet fetched."
+  Fix: (a) throttle backfill calls (`BACKFILL_THROTTLE_MS`, default 9000 ≈ under 7/min); (b) cap
+  calls per cycle (`BACKFILL_MAX`, default 5); (c) one 429 retry honoring `Retry-After` before
+  giving up. Crucially (d) a post whose full text could NOT be recovered (rate-limited, error,
+  or cap reached) is **deferred** — not persisted (neither active nor discarded), logged
+  distinctly, and left unknown so it is re-fetched next cycle. "too-short" is only assigned when
+  the text is authoritative (listing already long enough, or backfill returned). This keeps the
+  prefilter honest: it discards on what a post IS, never on what we failed to fetch.
+
 - **Discarded posts persist (`status='discarded'` + `discard_reason`) and join the dedup set.**
   A triaged-out post is kept in the posts table so it is never re-judged (dedup =
   drafted ∪ discarded) and stays resolvable for roll-ups, with its reason auditable. `id =

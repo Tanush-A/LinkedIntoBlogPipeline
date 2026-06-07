@@ -191,6 +191,56 @@ describe('ingestPartitions (SOURCE_MODE=live)', () => {
     expect(getDiscardedPostIds().has(forcedId)).toBe(false);
   });
 
+  it('a rate-limited (429) backfill defers the post — NOT misclassified as too-short', async () => {
+    process.env.BACKFILL_POST_TEXT = 'true';
+    listing = [raw('500', '')]; // empty listing text → needs backfill
+    // /posts/info always 429s (original attempt + the one retry) → text never recovered.
+    mockFetch.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.includes('username-to-urn')) return env({ urn: 'ACoA-test-urn', username: 'justinshriber' });
+      if (u.includes('/posts/all')) return env({ cursor: 'c', posts: listing });
+      if (u.includes('/posts/info')) {
+        return { ok: false, status: 429, headers: { get: () => null }, json: async () => ({ success: false, errors: 'rate limited' }) };
+      }
+      if (u.includes('hooks.slack')) return { ok: true };
+      return env({});
+    });
+    judge([]); // no new active posts to group
+
+    const { skipped, partitions } = await ingestPartitions();
+    const id = idOf('500');
+    // The post is deferred, not discarded: NOT in the skip list, NOT in the discarded set,
+    // and NOT persisted — so it stays unknown and will be retried next cycle.
+    expect(skipped.find((s) => s.post_id === id)).toBeUndefined();
+    expect(getDiscardedPostIds().has(id)).toBe(false);
+    expect(getPostById(id)).toBeUndefined();
+    expect(partitions.find((p) => p.posts.some((x) => x.id === id))).toBeUndefined();
+    // posts/info was retried once (2 calls total) before deferring.
+    const infoCalls = mockFetch.mock.calls.filter((c) => String(c[0]).includes('/posts/info'));
+    expect(infoCalls.length).toBe(2);
+  });
+
+  it('caps backfills per cycle at BACKFILL_MAX (excess thin posts are deferred, not discarded)', async () => {
+    process.env.BACKFILL_POST_TEXT = 'true';
+    process.env.BACKFILL_MAX = '2';
+    infoText = LONG; // every backfill that runs succeeds
+    listing = [raw('601', ''), raw('602', ''), raw('603', '')]; // 3 thin posts, cap is 2
+    judge([
+      { theme: 'A', post_ids: [idOf('601')], confidence: 1 },
+      { theme: 'B', post_ids: [idOf('602')], confidence: 1 },
+    ]);
+
+    const { partitions, skipped } = await ingestPartitions();
+    // Only 2 backfills run → 2 posts recovered+active; the 3rd is deferred (not discarded).
+    const infoCalls = mockFetch.mock.calls.filter((c) => String(c[0]).includes('/posts/info'));
+    expect(infoCalls.length).toBe(2);
+    expect(partitions.length).toBe(2);
+    expect(skipped.find((s) => s.post_id === idOf('603'))).toBeUndefined();
+    expect(getDiscardedPostIds().has(idOf('603'))).toBe(false);
+    expect(getPostById(idOf('603'))).toBeUndefined(); // deferred — retry next cycle
+    delete process.env.BACKFILL_MAX;
+  });
+
   it('backfills thin listing text from /posts/info before triage', async () => {
     process.env.BACKFILL_POST_TEXT = 'true';
     infoText = LONG; // /posts/info returns the full text

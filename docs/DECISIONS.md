@@ -4,6 +4,52 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+## [2026-06-07] Repurposing (blog → LinkedIn / X / newsletter) — scoped and cut for time
+
+**Status:** Accepted (map, not build) — the fastest future add
+
+**Context:**
+A natural extension of the pipeline is to fan the published blog post back out into
+channel-native variants (a LinkedIn post, an X thread, a newsletter blurb), each linking back
+to the canonical article. It is on the roadmap and the `upcoming: repurposing` todos in
+`tests/publish.test.ts` are its placeholders. It was cut from this build for time.
+
+**Decision:**
+- **Cut now; documented as the single fastest future add.** This is a **generation-layer
+  addition only** — there is no architectural risk, which is exactly why it is the cheapest
+  thing to add next.
+- **Where it slots in:** one post-publish step, triggered by the publish event — i.e. right
+  after `publish()` sets `status='published'` and persists `cms_url` (the existing terminal
+  transition). It does not touch the gate, the state machine, or the ingestion/grouping path.
+- **What it reuses, unchanged:** the same OpenAI model and prompt-builder pattern as the
+  existing passes, and the same deterministic `verifyDraft` guardrail (slop-ban + ungrounded-
+  figure checks) on every variant before it is stored. Each variant embeds the published
+  `cms_url` as its canonical back-link and is stored with a reference to the originating draft
+  id — no schema migration (a `repurposed_variants` row or a JSON column references
+  `draft.id`; reuse the existing JSON-column pattern).
+- **Human gate:** variants are drafts too — they go through the same review surface before
+  anything posts to a channel. Nothing auto-publishes to LinkedIn/X.
+
+**Why it is low-risk (the case for "fastest add"):**
+- No new gate states, no new idempotency model (key off `draft.id` + variant channel),
+  no new external ingestion surface. The only new external write targets (LinkedIn/X/
+  newsletter APIs) sit behind the SAME human-approval gate the blog publish already uses.
+- It is additive and independently demonstrable: the core loop (raw signal → grouped synthesis
+  → human gate → published artifact) is complete and defensible without it.
+
+**Rejected / deferred alternatives:**
+- Building it now — pure time trade; it earns nothing the core loop does not already prove,
+  and the generation + verification machinery it needs already exists.
+- Auto-posting variants without review — violates the project's non-negotiable ("nothing
+  publishes without approval"); variants must pass the same gate.
+
+**Consequences:**
+- `tests/publish.test.ts` keeps the three `upcoming: repurposing` todos as the spec for the
+  add (trigger on publish → N variants; each variant body contains the `cms_url`; variants
+  stored with a reference to the original draft id).
+
+---
+
 ## [2026-06-06] Stage 8 — Fully-automatic ingestion via LinkdAPI (live source mode)
 
 **Status:** Accepted

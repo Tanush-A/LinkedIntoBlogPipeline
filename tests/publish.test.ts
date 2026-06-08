@@ -172,6 +172,9 @@ describe('publish', () => {
 });
 
 // ─── todo stubs ───────────────────────────────────────────────────────────────
+// Repurposing (blog → LinkedIn/X/newsletter) is scoped + cut for time — a generation-layer
+// add (one post-publish step, same model + verifyDraft, no architectural change).
+// See docs/DECISIONS.md [2026-06-07] "Repurposing — scoped and cut for time".
 
 describe('upcoming: repurposing', () => {
   it.todo('triggers on publish event: 3 repurposed variants generated');

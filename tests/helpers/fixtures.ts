@@ -64,6 +64,28 @@ export const DEVTO_MOCK_RESPONSE = {
   url: 'https://dev.to/testuser/why-forecasting-is-a-management-problem-abc123',
 };
 
+// Repurpose pass JSON — what the LLM returns for the promo kit. Deliberately OMITS the cms_url
+// so tests exercise repurpose.ts's DETERMINISTIC url-enforcement (not the model's compliance).
+// Clean of slop/ungrounded figures so verification passes by default.
+export const MOCK_REPURPOSE_VARIANTS = {
+  linkedin:
+    'Most revenue teams treat forecasting as a reporting exercise.\n\n' +
+    'It is a management discipline. When you reframe it that way, the whole rhythm of the ' +
+    'business changes — reps get coached on the deal, not the number.',
+  twitter: [
+    'Most revenue teams treat forecasting as a reporting exercise. Wrong frame.',
+    'Forecasting is a management discipline, not a finance one.',
+    'Coach the deal, not the number.',
+    'Full breakdown here:',
+  ],
+  newsletter:
+    'New on the blog: why forecasting is a management problem, not a finance one, and what ' +
+    'changes when revenue leaders treat it that way.',
+};
+
+/** A cms_url for repurpose tests — no stat-shaped digits, so it never trips verifyDraft. */
+export const MOCK_CMS_URL = 'https://dev.to/testuser/why-forecasting-is-a-management-problem-abc';
+
 export function makeDraft(overrides: Partial<DraftInsert> = {}): DraftInsert {
   const source_post_ids = overrides.source_post_ids ?? [SEED_POST_ID];
   return {

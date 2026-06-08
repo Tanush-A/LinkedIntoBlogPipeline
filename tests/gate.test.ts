@@ -22,6 +22,7 @@ import {
   MOCK_CRITIQUE,
   MOCK_REVISED_DRAFT,
   DEVTO_MOCK_RESPONSE,
+  MOCK_REPURPOSE_VARIANTS,
   SEED_POST_ID,
   SEED_POST_ID_2,
 } from './helpers/fixtures';
@@ -36,6 +37,12 @@ beforeEach(() => {
     json: async () => DEVTO_MOCK_RESPONSE,
   });
   vi.stubGlobal('fetch', mockFetch);
+  // Default LLM response = a valid promo kit, so each successful approve runs repurpose
+  // (now awaited in the publish path) quietly and in-window. Per-test `mockResolvedValueOnce`
+  // for the regen revise pass still takes precedence.
+  mockCreate.mockResolvedValue({
+    choices: [{ message: { content: JSON.stringify(MOCK_REPURPOSE_VARIANTS) } }],
+  });
 });
 
 afterEach(() => {
@@ -225,6 +232,8 @@ describe('state machine', () => {
 
     expect(failRes.status).toBe(500);
     expect(getDraft(d.id)!.status).toBe('failed');
+    // Repurpose triggers ONLY after a successful publish — a failed publish must not reach it.
+    expect(mockCreate).not.toHaveBeenCalled();
 
     // Second approve: mockFetch falls back to the default (ok: true, DEVTO_MOCK_RESPONSE)
     const retryRes = await request(app)
@@ -235,6 +244,43 @@ describe('state machine', () => {
     expect(retryRes.status).toBe(302);
     expect(getDraft(d.id)!.status).toBe('published');
     expect(getDraft(d.id)!.cms_url).toBe(DEVTO_MOCK_RESPONSE.url);
+  });
+
+  // ── Repurposing (post-publish promo kit) ──────────────────────────────────────
+
+  it('approve fires repurpose AFTER publish: published draft gets a 3-variant promo kit', async () => {
+    const d = insertDraft(makeDraft({ status: 'pending' }));
+
+    const res = await request(app)
+      .post(`/action/${d.id}`)
+      .type('form')
+      .send('action=approve');
+
+    expect(res.status).toBe(302);
+    const fresh = getDraft(d.id)!;
+    expect(fresh.status).toBe('published');
+    // repurpose is awaited in the publish path, so the kit is persisted by the time we redirect.
+    expect(fresh.repurposed_content).toBeDefined();
+    expect(fresh.repurposed_content!.draft_id).toBe(d.id);
+    expect(fresh.repurposed_content!.variants).toHaveLength(3);
+  });
+
+  it('a repurpose failure does not break approve: still 302 + published, no promo kit', async () => {
+    const d = insertDraft(makeDraft({ status: 'pending' }));
+    // One-time rejection ahead of the default success → repurpose throws; handler swallows it.
+    mockCreate.mockRejectedValueOnce(new Error('LLM unavailable'));
+
+    const res = await request(app)
+      .post(`/action/${d.id}`)
+      .type('form')
+      .send('action=approve');
+
+    expect(res.status).toBe(302);
+    expect(res.headers['location']).toBe(DEVTO_MOCK_RESPONSE.url);
+    const fresh = getDraft(d.id)!;
+    expect(fresh.status).toBe('published');
+    expect(fresh.cms_url).toBe(DEVTO_MOCK_RESPONSE.url);
+    expect(fresh.repurposed_content).toBeUndefined();
   });
 
   // ── Edge cases ────────────────────────────────────────────────────────────────

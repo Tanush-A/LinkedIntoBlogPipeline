@@ -5,9 +5,28 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('openai', () => ({ default: vi.fn() }));
 
-import { notify } from '../src/pipeline/notify';
+import { notify, notifyRepurposed } from '../src/pipeline/notify';
 import { insertDraft, _resetDbForTesting } from '../src/db';
 import { makeDraft, MOCK_POST } from './helpers/fixtures';
+import type { RepurposedContent, VerificationResult } from '../src/types';
+
+const CLEAN: VerificationResult = { bannedTerms: [], ungroundedNumbers: [], passed: true };
+
+function makeRepurposed(overrides: Partial<RepurposedContent> = {}): RepurposedContent {
+  const cms_url = 'https://dev.to/x/why-forecasting-is-a-management-problem';
+  return {
+    draft_id: 'draft-1',
+    cms_url,
+    blog_title: 'Why Forecasting Is a Management Problem',
+    generated_at: new Date().toISOString(),
+    variants: [
+      { channel: 'linkedin', label: 'LinkedIn post', text: `LinkedIn body\n\n${cms_url}`, verification: CLEAN },
+      { channel: 'twitter', label: 'X / Twitter thread', text: `1/ hook\n\n2/ ${cms_url}`, verification: CLEAN },
+      { channel: 'newsletter', label: 'Newsletter blurb', text: `Blurb ${cms_url}`, verification: CLEAN },
+    ],
+    ...overrides,
+  };
+}
 
 let mockFetch: ReturnType<typeof vi.fn>;
 
@@ -72,5 +91,53 @@ describe('notify', () => {
     } finally {
       process.env.SLACK_WEBHOOK_URL = original;
     }
+  });
+});
+
+describe('notifyRepurposed', () => {
+  it('sends ONE message with blog title + cms_url on top and a section per channel', async () => {
+    const content = makeRepurposed();
+    await notifyRepurposed(content);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string) as { text: string };
+
+    expect(body.text).toContain(content.blog_title);
+    expect(body.text).toContain(content.cms_url);
+    expect(body.text).toContain('LinkedIn post');
+    expect(body.text).toContain('X / Twitter thread');
+    expect(body.text).toContain('Newsletter blurb');
+  });
+
+  it('surfaces verification flags for a variant that did not pass', async () => {
+    const content = makeRepurposed();
+    content.variants[0].verification = {
+      bannedTerms: ['delve'],
+      ungroundedNumbers: ['3.1x'],
+      passed: false,
+    };
+    await notifyRepurposed(content);
+
+    const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string) as { text: string };
+    expect(body.text).toContain('delve');
+    expect(body.text).toContain('3.1x');
+  });
+
+  it('is best-effort: does not throw when SLACK_WEBHOOK_URL is unset', async () => {
+    const original = process.env.SLACK_WEBHOOK_URL;
+    delete process.env.SLACK_WEBHOOK_URL;
+    try {
+      await expect(notifyRepurposed(makeRepurposed())).resolves.toBeUndefined();
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      process.env.SLACK_WEBHOOK_URL = original;
+    }
+  });
+
+  it('is best-effort: does not throw when the webhook returns non-ok', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+    await expect(notifyRepurposed(makeRepurposed())).resolves.toBeUndefined();
   });
 });

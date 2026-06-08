@@ -4,9 +4,77 @@ Decisions are recorded in reverse chronological order.
 
 ---
 
+## [2026-06-08] Repurposing — built (post-publish, fail-safe)
+
+**Status:** Accepted (built) — supersedes the [2026-06-07] "scoped and cut" entry below
+
+**Context:**
+Repurposing (published blog → LinkedIn post / X thread / newsletter blurb) was previously cut
+for time and documented as the fastest future add. It is now built. As predicted, it was a
+pure generation-layer addition with no architectural change — no new gate states, no new
+idempotency model, no schema migration beyond one JSON column.
+
+**Decisions:**
+
+- **Runs post-publish, in the approve path, AFTER `status='published'` and `cms_url` are set.**
+  `repurpose(draft)` is called from the approval handler immediately after `publish()` succeeds.
+  It generates the three variants, verifies them, persists them, and delivers to Slack.
+
+- **It NEVER writes draft status.** This is what structurally guarantees "a repurpose failure
+  cannot affect the publish" — the post is already live and persisted before repurpose runs,
+  and repurpose only ever writes the `repurposed_content` column. Status is untouchable from
+  this path.
+
+- **Awaited, wrapped in try/catch at the call site (not fire-and-forget).** A repurpose failure
+  is logged and swallowed; the approve response still 302-redirects to the live post. Chosen
+  over fire-and-forget so the work completes deterministically within the request (and within
+  the test's mocked window); the only cost is the approve click waits ~one LLM call, which is
+  latency, not risk, since the post is already live. Rejected: detached `.catch()` promise —
+  a background success would hit Slack after the request (and after test teardown).
+
+- **One `json_object` LLM call for all three variants** (`{ linkedin, twitter[], newsletter }`),
+  grounded in the same `brand.ts` voice + slop_ban as the blog passes. Rejected: three separate
+  calls — more cost, and one call keeps a single consistent angle across channels.
+
+- **The `cms_url` is enforced into every variant deterministically**, not trusted to the LLM —
+  same philosophy as `verifyDraft`. `ensureUrl`/`renderThread` inject the link if the model
+  omitted it, so "every variant links back" is a code guarantee, not a prompt hope.
+
+- **Same verification corpus as the blog.** Each variant runs `verifyDraft(text, sourcePosts)` —
+  identical slop-ban + ungrounded-figure checks, with the source posts as grounding so an
+  author-stated figure is not falsely flagged. Surfaced (flags shown in the Slack message),
+  not hard-blocking — consistent with the blog's verification stance.
+
+- **Delivered, not auto-posted — the gate is preserved.** Variants land in ONE Slack message
+  (blog title + URL on top, a labelled section per channel) for a human to copy out. Nothing
+  posts to LinkedIn/X/a newsletter automatically. The non-negotiable ("nothing publishes
+  without approval") holds for the variants too.
+
+- **Persisted before Slack.** `repurposed_content` is written to the draft row before the Slack
+  call, so a webhook outage never loses generated variants.
+
+**Consequences:**
+- New: `src/pipeline/repurpose.ts`, `prompts/repurpose.ts`, `notifyRepurposed` in `notify.ts`,
+  a `repurposed_content` JSON column (guarded ALTER + CREATE TABLE + JSON_COLUMNS, mirroring the
+  `verification` column), and the `RepurposedContent`/`RepurposedVariant` types.
+- `tests/publish.test.ts` repurposing todos are now real tests (3 variants; each contains the
+  cms_url; persisted with draft-id reference; verifyDraft applied per variant; failure does not
+  affect published status). `tests/gate.test.ts` adds the handler wiring (approve fires
+  repurpose after publish) and the fail-safe (a repurpose error still 302s + stays published;
+  a failed publish never reaches repurpose).
+- Not built: surfacing variants on `GET /review` (Slack is the delivery surface); auto-posting
+  to channels (deliberately gated).
+- Known consequence (deferred): because `published` is terminal, a swallowed repurpose failure
+  has no re-trigger path — re-approve returns 400, so the kit is simply absent until a manual/
+  separate trigger is added. This is a correct consequence of "never affect publish," not a bug;
+  a standalone `repurpose(draftId)` re-run hook is the future add.
+
+---
+
 ## [2026-06-07] Repurposing (blog → LinkedIn / X / newsletter) — scoped and cut for time
 
-**Status:** Accepted (map, not build) — the fastest future add
+**Status:** [SUPERSEDED 2026-06-08 — repurposing was built; see the entry above. This entry is
+retained as the original scoping rationale.] Accepted (map, not build) — the fastest future add
 
 **Context:**
 A natural extension of the pipeline is to fan the published blog post back out into

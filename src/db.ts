@@ -19,6 +19,7 @@ import type {
   ExtractedIdea,
   EvalScores,
   VerificationResult,
+  RepurposedContent,
   Post,
   PublishedRef,
 } from './types';
@@ -65,6 +66,7 @@ db.exec(`
     cms_url          TEXT,   -- NULL is the publish() idempotency guard
     eval_scores      TEXT,   -- JSON(EvalScores)
     verification     TEXT,   -- JSON(VerificationResult)
+    repurposed_content TEXT, -- JSON(RepurposedContent) — post-publish channel variants
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
   );
@@ -104,6 +106,7 @@ db.exec(`
 // error that fires when a migration has already run.
 for (const ddl of [
   `ALTER TABLE drafts ADD COLUMN verification TEXT`,
+  `ALTER TABLE drafts ADD COLUMN repurposed_content TEXT`,
   `ALTER TABLE drafts ADD COLUMN source_post_ids TEXT`,
   `ALTER TABLE drafts ADD COLUMN group_fingerprint TEXT`,
   `ALTER TABLE drafts ADD COLUMN theme TEXT`,
@@ -157,6 +160,7 @@ interface DraftRow {
   cms_url: string | null;
   eval_scores: string | null;
   verification: string | null;
+  repurposed_content: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -177,6 +181,7 @@ type WritableColumn =
   | 'cms_url'
   | 'eval_scores'
   | 'verification'
+  | 'repurposed_content'
   | 'created_at'
   | 'updated_at';
 
@@ -186,6 +191,7 @@ const JSON_COLUMNS = new Set<WritableColumn>([
   'extracted_idea',
   'eval_scores',
   'verification',
+  'repurposed_content',
 ]);
 
 /** Coerce a Draft field to a value better-sqlite3 will accept (string | number | null). */
@@ -218,6 +224,9 @@ function rowToDraft(row: DraftRow): Draft {
     ...(row.verification != null
       ? { verification: JSON.parse(row.verification) as VerificationResult }
       : {}),
+    ...(row.repurposed_content != null
+      ? { repurposed_content: JSON.parse(row.repurposed_content) as RepurposedContent }
+      : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -239,13 +248,13 @@ const insertStmt = db.prepare(`
     id, source_post_id, source_post_ids, group_fingerprint, theme,
     status, revision_count, reviewer_note,
     extracted_idea, raw_draft, critique, revised_draft, cms_url, eval_scores,
-    verification,
+    verification, repurposed_content,
     created_at, updated_at
   ) VALUES (
     @id, @source_post_id, @source_post_ids, @group_fingerprint, @theme,
     @status, @revision_count, @reviewer_note,
     @extracted_idea, @raw_draft, @critique, @revised_draft, @cms_url, @eval_scores,
-    @verification,
+    @verification, @repurposed_content,
     @created_at, @updated_at
   )
 `);
@@ -269,6 +278,7 @@ export function insertDraft(input: DraftInsert): Draft {
     cms_url: toBind('cms_url', input.cms_url),
     eval_scores: toBind('eval_scores', input.eval_scores),
     verification: toBind('verification', input.verification),
+    repurposed_content: toBind('repurposed_content', input.repurposed_content),
     created_at: input.created_at ?? now,
     updated_at: input.updated_at ?? now,
   });
@@ -477,6 +487,7 @@ const UPDATABLE_COLUMNS: UpdatableColumn[] = [
   'cms_url',
   'eval_scores',
   'verification',
+  'repurposed_content',
 ];
 
 /** Truncate DRAFT rows + meta — test isolation only. Posts persist (seed-synced once). */

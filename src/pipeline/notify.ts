@@ -3,7 +3,7 @@
 // A draft may synthesize multiple source posts — the title/source lines note the extra
 // sources, and the judge's theme is included when set. n=1 reads exactly as before.
 
-import type { Draft, Post } from '../types';
+import type { Draft, Post, RepurposedContent } from '../types';
 
 export async function notify(draft: Draft, posts: Post[]): Promise<void> {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
@@ -43,6 +43,55 @@ export async function notify(draft: Draft, posts: Post[]): Promise<void> {
 
   if (!response.ok) {
     throw new Error(`Slack webhook failed: ${response.status} ${response.statusText}`);
+  }
+}
+
+/**
+ * Deliver the post-publish promo kit to Slack as ONE message — the published title + URL at
+ * the top, then a clearly labelled section per channel (LinkedIn / X / newsletter) for a human
+ * to copy out. Nothing is auto-posted to any platform — the human gate is preserved.
+ * Best-effort: never throws (the variants are already persisted on the draft row).
+ */
+export async function notifyRepurposed(content: RepurposedContent): Promise<void> {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.warn('[notify] SLACK_WEBHOOK_URL not set — skipping repurpose delivery');
+    return;
+  }
+
+  const sections = content.variants.map((v) => {
+    const v9n = v.verification.passed
+      ? ''
+      : `\n_⚠️ review:_ ${[
+          v.verification.bannedTerms.length ? `banned: ${v.verification.bannedTerms.join(', ')}` : '',
+          v.verification.ungroundedNumbers.length
+            ? `ungrounded: ${v.verification.ungroundedNumbers.join(', ')}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('; ')}`;
+    return `*${v.label}*${v9n}\n${v.text}`;
+  });
+
+  const text = [
+    `*Promo kit ready — copy & post*`,
+    `*${content.blog_title}*`,
+    content.cms_url,
+    ``,
+    sections.join('\n\n──────────\n\n'),
+  ].join('\n');
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) {
+      console.warn(`[notify] repurpose delivery failed: ${response.status} ${response.statusText}`);
+    }
+  } catch (err) {
+    console.warn(`[notify] repurpose delivery error: ${err instanceof Error ? err.message : err}`);
   }
 }
 

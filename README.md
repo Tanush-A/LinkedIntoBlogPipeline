@@ -21,7 +21,7 @@ You publish thought leadership off the back of the CEO's voice. Today that means
 | **Each becomes a timely draft** | A LinkedIn post becomes a full, on-brand blog draft — title, structure, FAQ, the works — while the topic is still hot. |
 | **Recurring themes become pillar pieces** | If he posts three times about the same idea, you don't get three near-identical blogs. The system notices the shared theme and writes **one** strong pillar article instead. |
 | **Nothing publishes without your approval** | Every draft lands in a clean review screen. You **Approve**, **Reject**, or **Request Edits** (in plain English — "sharpen the hook," "cut section 2"). Only your click publishes. This is a hard rule, enforced in code, with no bypass. |
-| **Every published post ships with a promo kit** *(designed — the #1 next add, not yet live)* | The roadmap turns each published article into channel-native variants — a LinkedIn post, an X thread, a newsletter blurb — each linking back to the article, each also passing through your same approval gate. Designed and de-risked; see Part 2. |
+| **Every published post ships with a promo kit** | The moment a post goes live, the system writes channel-native variants — a LinkedIn post, an X thread, a newsletter blurb — each linking back to the article, and drops them into Slack for you to copy out. Nothing posts to any channel automatically; the variants pass the same quality checks as the blog. |
 
 You are the only gate. The machine does the drafting and the chasing; you do the judging.
 
@@ -115,6 +115,9 @@ seed/posts.json ──► Ingest ──► posts table (canonical) ──► ded
            needs_edits ─► setImmediate(regenerate) ─► re-notify  [bg, returns 202]
                        ▼
               dev.to POST → live URL → status:'published'  (TERMINAL)
+                       │
+           repurpose(published)  ── 3 channel variants (LinkedIn/X/newsletter),
+           [awaited, fail-safe]     cms_url enforced + verifyDraft'd → Slack (copy, don't auto-post)
 ```
 
 **Two processes, async gate (Option C).** **Run A** (`src/run.ts`) ingests → generates → notifies, then **exits** — there is no in-flight state to hold. **Run B** (`src/server/approval.ts`) is the always-on server handling every approval interaction. The "wait for a human" is a `status` column in SQLite, not a suspended workflow. Trigger of the gate is the reviewer's `POST /action/:id`.
@@ -128,6 +131,7 @@ seed/posts.json ──► Ingest ──► posts table (canonical) ──► ded
 | **3. Notify** | Slack incoming webhook (HTTP POST) | `src/pipeline/notify.ts` |
 | **4. Gate** | Express `GET /review` + `POST /action`; 3 verbs; async status table | `src/server/approval.ts` |
 | **5. Publish** | dev.to REST API, structured fields, idempotent guard | `src/pipeline/publish.ts` |
+| **Repurpose** | Post-publish: 3 channel variants → verify → Slack (copy, not auto-post) | `src/pipeline/repurpose.ts`, `prompts/repurpose.ts` |
 | **Grouping** | Pool → LLM-judge partition → group-fingerprint identity | `src/pipeline/group.ts`, `src/lib/fingerprint.ts` |
 | **State / idempotency** | post-id dedup **+** group-fingerprint dedup **+** `cms_url` publish guard | `src/db.ts` |
 | **Observability** | Draft UUID = run ID, stamped on every structured log line | throughout |
@@ -142,9 +146,13 @@ seed/posts.json ──► Ingest ──► posts table (canonical) ──► ded
 
 **AEO/SEO scorecard.** `buildScorecard()` — also pure/deterministic, read-only on the review page: title length, quick-answer block in the first ~200 words, question-style H2s, FAQ section, meta-description length, and the critique's extractability score. Advisory (PASS/WARN), never blocking.
 
+**Post-publish repurposing.** `repurpose(draft)` runs in the approve path *after* `publish()` persists `published` + `cms_url`. One `json_object` call produces all three channel variants (LinkedIn post, X thread, newsletter blurb); the `cms_url` is **enforced into each variant deterministically** (not trusted to the LLM); each variant is run through the same `verifyDraft` guardrail (corpus = the source posts) and delivered as one Slack message for a human to copy out — **nothing auto-posts**, so the gate is preserved. It is **awaited but fail-safe**: it never writes draft status, so a repurpose failure cannot revert the live post, and the handler swallows any error before redirecting. `repurposed_content` is persisted before the Slack call so a webhook outage never loses the variants.
+
 **Source-mode ingestion.** `SOURCE_MODE=seed` (default, deterministic — also the test fixture) | `live` (LinkdAPI polling). Same code below the `Post` contract. Live mode adds: **triage** (deterministic prefilters drop reshares/media-only/too-short, + a judge skip-list — the *third* quality gate alongside the re-score loop and the human), **text backfill** (`/posts/all` omits text for ~⅓ of posts; backfill from `/posts/info`, throttled + capped, and **defer-not-discard** on rate-limit so "not yet fetched" is never misclassified as "too short"), and **cross-process status** via a `meta` table read at `GET /status`. Polling, not webhooks (LinkedIn offers no post webhook).
 
 ## What I built vs. what I mapped
+
+> Every **mapped / not-built** item, with the one-line plan to build it: **[`docs/MAP.md`](docs/MAP.md)**.
 
 | Component | Status | Note |
 |---|---|---|
@@ -162,7 +170,7 @@ seed/posts.json ──► Ingest ──► posts table (canonical) ──► ded
 | Auth-token refresh | **Mapped** | env-var tokens for demo |
 | Approval-endpoint auth | **Mapped** | localhost only; see fix-first |
 | JSON-LD schema stack | **Mapped, not built** | hosted CMS owns `<head>` — see #6 |
-| Repurposing / promo kit | **Mapped (designed)** | the fastest next add |
+| Repurposing / promo kit (post-publish LinkedIn/X/newsletter variants) | **Built** | runs after publish, fail-safe, delivered-to-Slack not auto-posted |
 
 ## Decisions & tradeoffs
 
@@ -187,7 +195,7 @@ Scannable: **Decision · Chose · Rejected · Why.**
 | 15 | CMS | **dev.to** REST | Hashnode (moved behind paid Pro mid-build); Ghost self-host | Free, clean REST, real public URL, all AEO fields. Auth is `api-key:` header (not Bearer); tags comma-separated max 4 |
 | 16 | publish() idempotency | Guard `status==='approved' && cms_url==null` + terminal `published` | Status-only guard | Double-click / POST refresh cannot create a duplicate dev.to post |
 | 17 | Retries | **Mapped, not built** | Build now | Explicit trade for dropping the durable orchestrator; manual `failed`→Approve covers demo scale |
-| 18 | Repurposing | Cut now, documented as fastest add | Build now / auto-post variants | Generation-layer-only, zero architectural risk; variants must still pass the human gate |
+| 18 | Repurposing | **Built** post-publish; awaited + fail-safe; delivered-to-Slack | Fire-and-forget; auto-post to channels | Runs after publish and never writes status, so a failure can't revert the live post; awaited so it completes in-request; variants still pass the human gate (copied from Slack, not auto-posted) |
 
 Full rationale and rejected alternatives: [`docs/DECISIONS.md`](docs/DECISIONS.md). Architecture spec: [`docs/SPEC.md`](docs/SPEC.md), [`docs/SPEC-BATCH.md`](docs/SPEC-BATCH.md).
 
@@ -223,7 +231,6 @@ Ranked by likelihood × impact. The **headline** is #1 — it's the most *instru
 - **Eval harness** — automate the `docs/eval/` baseline into a regression test that fails CI on a quality drop (directly mitigates #5).
 - **Secure + deploy the gate** — path-token auth, then Render/Railway so a real reviewer approves from anywhere.
 - **Durable retries + observability** — `p-retry` on all 5 calls; ship logs to Loki/Datadog; alert on `failed` rows older than N minutes.
-- **Repurposing / promo kit** — the post-publish fan-out (LinkedIn/X/newsletter), reusing the same prompt-builder + `verifyDraft` + human gate; zero architectural risk.
 - **Embedding prefilter** for grouping at scale — cluster candidates by cosine similarity, judge confirms only the clusters (~10× fewer judge tokens).
 - **Production ingestion** — swap LinkdAPI for the CEO's authorized OAuth/export (one adapter file).
 

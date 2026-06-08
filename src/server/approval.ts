@@ -8,6 +8,7 @@ import express from 'express';
 import type { Post, CritiqueOutput } from '../types';
 import { getDraft, updateDraft, getPostById, getMeta } from '../db';
 import { publish } from '../pipeline/publish';
+import { repurpose } from '../pipeline/repurpose';
 import { regenerate } from '../pipeline/regenerate';
 import { LAST_POLL_KEY } from '../pipeline/cycle';
 import { renderMarkdown, escapeHtml } from '../lib/markdown';
@@ -327,6 +328,15 @@ app.post('/action/:draftId', async (req, res) => {
       await publish(approvedDraft);
       const published = getDraft(id)!;
       if (published.cms_url) {
+        // Post-publish: generate channel variants + deliver to Slack. The post is already
+        // live and persisted — a repurpose failure must NOT revert the publish or error this
+        // response. repurpose() never writes status, so publish state is structurally safe.
+        try {
+          await repurpose(published);
+        } catch (err) {
+          const rmsg = err instanceof Error ? err.message : String(err);
+          console.error(`[approve] repurpose failed draft=${id} (post is live): ${rmsg}`);
+        }
         res.redirect(302, published.cms_url);
         return;
       }

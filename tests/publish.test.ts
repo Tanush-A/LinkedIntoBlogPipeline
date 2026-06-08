@@ -3,11 +3,19 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('openai', () => ({ default: vi.fn() }));
+// Class-based mock so repurpose() (which constructs `new OpenAI()`) gets a working chat client.
+// publish.ts never constructs OpenAI, so this is inert for the publish tests.
+const { mockCreate } = vi.hoisted(() => ({ mockCreate: vi.fn() }));
+vi.mock('openai', () => ({
+  default: class OpenAIMock {
+    chat = { completions: { create: mockCreate } };
+  },
+}));
 
 import { publish } from '../src/pipeline/publish';
+import { repurpose } from '../src/pipeline/repurpose';
 import { insertDraft, getDraft, _resetDbForTesting } from '../src/db';
-import { makeDraft, DEVTO_MOCK_RESPONSE } from './helpers/fixtures';
+import { makeDraft, DEVTO_MOCK_RESPONSE, MOCK_REPURPOSE_VARIANTS, MOCK_CMS_URL } from './helpers/fixtures';
 
 let mockFetch: ReturnType<typeof vi.fn>;
 
@@ -171,13 +179,76 @@ describe('publish', () => {
   });
 });
 
-// ─── todo stubs ───────────────────────────────────────────────────────────────
-// Repurposing (blog → LinkedIn/X/newsletter) is scoped + cut for time — a generation-layer
-// add (one post-publish step, same model + verifyDraft, no architectural change).
-// See docs/DECISIONS.md [2026-06-07] "Repurposing — scoped and cut for time".
+// ─── Repurposing (post-publish promo kit) ───────────────────────────────────────
+// Built [2026-06-08]: a post-publish generation step — same model + verifyDraft, no
+// architectural change. repurpose() runs AFTER a successful publish and never writes status.
+// See docs/DECISIONS.md [2026-06-08] "Repurposing — built (post-publish, fail-safe)".
 
-describe('upcoming: repurposing', () => {
-  it.todo('triggers on publish event: 3 repurposed variants generated');
-  it.todo('each variant body contains the published cms_url');
-  it.todo('repurposed variants are stored with reference to original draft id');
+function mockRepurposeOnce(variants: unknown = MOCK_REPURPOSE_VARIANTS): void {
+  mockCreate.mockResolvedValueOnce({
+    choices: [{ message: { content: JSON.stringify(variants) } }],
+  });
+}
+
+/** A freshly-published draft, ready to repurpose. */
+function publishedDraft() {
+  return getDraft(insertDraft(makeDraft({ status: 'published', cms_url: MOCK_CMS_URL })).id)!;
+}
+
+describe('repurposing', () => {
+  it('produces exactly 3 channel variants (linkedin, twitter, newsletter)', async () => {
+    mockRepurposeOnce();
+    const result = await repurpose(publishedDraft());
+
+    expect(result.variants).toHaveLength(3);
+    expect(result.variants.map((v) => v.channel)).toEqual(['linkedin', 'twitter', 'newsletter']);
+  });
+
+  it('each variant body contains the published cms_url (enforced deterministically)', async () => {
+    mockRepurposeOnce(); // fixture omits the URL — repurpose must inject it into all three
+    const result = await repurpose(publishedDraft());
+
+    for (const v of result.variants) {
+      expect(v.text).toContain(MOCK_CMS_URL);
+    }
+  });
+
+  it('persists repurposed_content on the row with a reference to the original draft id', async () => {
+    mockRepurposeOnce();
+    const d = publishedDraft();
+    await repurpose(d);
+
+    const stored = getDraft(d.id)!;
+    expect(stored.repurposed_content).toBeDefined();
+    expect(stored.repurposed_content!.draft_id).toBe(d.id);
+    expect(stored.repurposed_content!.variants).toHaveLength(3);
+    expect(stored.repurposed_content!.cms_url).toBe(MOCK_CMS_URL);
+  });
+
+  it('runs verifyDraft on each variant — a slop term in one variant is flagged, others pass', async () => {
+    mockRepurposeOnce({
+      ...MOCK_REPURPOSE_VARIANTS,
+      linkedin: 'This post delves into why forecasting is a management discipline.',
+    });
+    const result = await repurpose(publishedDraft());
+
+    const linkedin = result.variants.find((v) => v.channel === 'linkedin')!;
+    expect(linkedin.verification.bannedTerms).toContain('delve');
+    expect(linkedin.verification.passed).toBe(false);
+
+    const newsletter = result.variants.find((v) => v.channel === 'newsletter')!;
+    expect(newsletter.verification.passed).toBe(true);
+  });
+
+  it('a repurpose failure does NOT affect published status (status never written)', async () => {
+    mockCreate.mockRejectedValueOnce(new Error('LLM unavailable'));
+    const d = publishedDraft();
+
+    await expect(repurpose(d)).rejects.toThrow('LLM unavailable');
+
+    const fresh = getDraft(d.id)!;
+    expect(fresh.status).toBe('published');
+    expect(fresh.cms_url).toBe(MOCK_CMS_URL);
+    expect(fresh.repurposed_content).toBeUndefined();
+  });
 });

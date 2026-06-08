@@ -85,6 +85,8 @@ export interface Draft {
   eval_scores?: EvalScores;
   /** Output of the deterministic verification pass. JSON-stored. */
   verification?: VerificationResult;
+  /** Post-publish channel variants (LinkedIn/X/newsletter). Set by repurpose() after publish. JSON-stored. */
+  repurposed_content?: RepurposedContent;
   /** ISO 8601 */
   created_at: string;
   /** ISO 8601 */
@@ -146,6 +148,41 @@ export interface VerificationResult {
   ungroundedNumbers: string[];
   /** true iff both lists are empty. */
   passed: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Repurposing — post-publish channel variants (generation-layer add)
+// ---------------------------------------------------------------------------
+
+/** A distribution channel a published blog post is repurposed into. */
+export type RepurposeChannel = 'linkedin' | 'twitter' | 'newsletter';
+
+/** One channel-native variant of a published blog post. */
+export interface RepurposedVariant {
+  channel: RepurposeChannel;
+  /** Human label for the Slack section, e.g. "LinkedIn post". */
+  label: string;
+  /** Channel-ready copy. For Twitter this is the numbered thread, joined. Always ends with the cms_url. */
+  text: string;
+  /** Same deterministic guardrail the blog runs — slop terms + ungrounded figures, surfaced not blocking. */
+  verification: VerificationResult;
+}
+
+/**
+ * The full repurposing artifact stored on the Draft row (JSON column).
+ * Generated AFTER a successful publish; never affects publish state.
+ */
+export interface RepurposedContent {
+  /** Reference back to the originating draft. */
+  draft_id: string;
+  /** The published blog URL every variant links to. */
+  cms_url: string;
+  /** Title of the published blog post the variants promote. */
+  blog_title: string;
+  /** ISO 8601 — when the variants were generated. */
+  generated_at: string;
+  /** One per channel (LinkedIn, Twitter/X, newsletter). */
+  variants: RepurposedVariant[];
 }
 
 // ---------------------------------------------------------------------------

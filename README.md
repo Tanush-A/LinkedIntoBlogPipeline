@@ -4,12 +4,12 @@
 
 The CEO's posts are watched automatically; each becomes a timely, on-brand blog draft; recurring themes are detected and consolidated into pillar pieces; **nothing publishes without a human's approval.** One complete loop runs end-to-end with a real, clickable published URL.
 
-> Two registers below. **Part 1** is for the Head of Marketing — what it does, in marketing terms. **Part 2** is the technical appendix — architecture, decisions, failure modes, and an interview crib. Read Part 1 first.
+> Two registers below. **Part 1** is what it does, in marketing terms. **Part 2** is the technical appendix — architecture, decisions, failure modes, and an interview crib. Read Part 1 first.
 
 ---
 ---
 
-# PART 1 — For the Head of Marketing
+# PART 1 — In Marketing Terms
 
 ## What it does, in your terms
 
